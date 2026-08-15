@@ -3,15 +3,24 @@ using Teavel.Intent;
 using Teavel.Tools;
 
 // ────────────────────────────────────────────────────────────────────────────
-// 라우터 정확도 측정 — "교사가 이렇게 말하면 이 도구가 나와야 한다" 를 세어 본다.
+// 라우터 측정 — **교사가 실제로 겪는 것**을 센다.
 //
-// 왜 저장소에 두는가: README 에 적힌 초기 수치(낱말 6/13, 7B 11/13)는 그때 쓴 문장이
-// 남아 있지 않아 **재현할 수 없다.** 모델을 바꿀 때마다 새 문장을 지어 재면 이전 값과
-// 견줄 수 없으므로, 문장 세트를 코드로 박아 둔다.
+// 부품(낱말 라우터·언어 모델)을 따로 재면 교사 경험과 어긋난다. 실제 경로는 이렇다:
+//
+//   LayeredIntentRouter: 낱말 라우터 먼저 →  점수 >= 0.55 면 **모델을 아예 안 부른다**
+//                        아니면 모델에 묻고, 모델 결과를 앞에 둔다
+//   TeavelSession:       1순위 점수 < 0.55 이고 후보가 2개 이상이면 교사에게 고르게 하고,
+//                        아니면 **그대로 실행한다**
+//
+// 여기서 중요한 것 — 언어 모델은 자기 답에 늘 0.8 을 매긴다. 0.55 를 넘으므로
+// **모델이 고르면 교사는 고를 기회 없이 그 도구를 만난다.** 그래서 모델 모드에서
+// '3순위 안에 있었다' 는 위로가 되지 않는다. 2·3순위는 화면에 뜨지 않는다.
+//
+// 그래서 결과를 정확도 대신 **교사가 보는 다섯 가지**로 센다.
 //
 // 쓰는 법:
-//   dotnet run --project tools/Teavel.Eval -- keyword
-//   dotnet run --project tools/Teavel.Eval -- model <모델.gguf 경로>
+//   dotnet run --project tools/Teavel.Eval -- keyword          (모델 없는 PC 재현)
+//   dotnet run --project tools/Teavel.Eval -- model <모델.gguf>
 //
 // 모델 모드는 llama.cpp 네이티브가 필요하다. **교사 PC 와 같은 Windows 에서 재는 것을
 // 전제로 한다** — 리눅스 개발 머신에서는 LLamaSharp 가 네이티브를 못 올리는 경우가 있다.
@@ -21,8 +30,8 @@ using Teavel.Tools;
 // 당연히 맞히므로 측정의 뜻이 없다. 앞쪽 13개는 비교적 평이하고, 뒤쪽 11개는 도구 이름·
 // 예시에 나오는 낱말을 일부러 피했다.
 //
-// 문장은 사람이 지은 것이라 엄밀한 평가가 아니다. **절대 점수보다 라우터 사이의 차이**
-// 를 보는 용도다(같은 세트를 여러 라우터에 돌려 견준다).
+// 문장은 사람이 지은 것이라 엄밀한 평가가 아니다. **절대 점수보다 설정 사이의 차이**
+// 를 보는 용도다(같은 세트를 모델 있는 경우/없는 경우에 돌려 견준다).
 var CASES = new Case[]
 {
     new("반별로 흩어진 성적 파일을 한 장으로 모아줘",           "excel.merge_workbooks"),
@@ -56,8 +65,8 @@ var CASES = new Case[]
 if (args.Length == 0 || args[0] is "-h" or "--help")
 {
     Console.WriteLine("사용법:");
-    Console.WriteLine("  keyword                낱말 라우터만 (모델 없이)");
-    Console.WriteLine("  model <모델.gguf>      로컬 언어 모델");
+    Console.WriteLine("  keyword                모델이 없는 교사 PC 를 재현");
+    Console.WriteLine("  model <모델.gguf>      모델이 있는 교사 PC 를 재현");
     return 2;
 }
 
@@ -71,29 +80,26 @@ if (stale.Count > 0)
     return 2;
 }
 
-IIntentRouter router;
-IDisposable? owned = null;
+LocalLlmIntentRouter? llm = null;
 string label;
 
-if (args[0] == "keyword")
-{
-    router = new KeywordIntentRouter();
-    label = "낱말 라우터만";
-}
+if (args[0] == "keyword") label = "모델 없음 (낱말 라우터만)";
 else if (args[0] == "model" && args.Length >= 2)
 {
     if (!File.Exists(args[1])) { Console.Error.WriteLine($"모델 파일이 없습니다: {args[1]}"); return 2; }
-    var llm = new LocalLlmIntentRouter(args[1]);
-    router = llm;
-    owned = llm;
+    llm = new LocalLlmIntentRouter(args[1]);
     label = Path.GetFileNameWithoutExtension(args[1]);
 }
 else { Console.Error.WriteLine("인자가 올바르지 않습니다. --help 를 보세요."); return 2; }
 
+// TeavelSession 이 만드는 것과 같은 라우터를 쓴다.
+var router = new LayeredIntentRouter(new KeywordIntentRouter(), llm);
+
 Console.WriteLine($"### {label}   (문장 {CASES.Length}개)");
 Console.WriteLine();
 
-int top1 = 0, top3 = 0;
+int ranRight = 0, ranWrong = 0, askedHit = 0, askedMiss = 0, lost = 0;
+var byModel = 0;
 var total = Stopwatch.StartNew();
 
 foreach (var (say, want) in CASES)
@@ -102,21 +108,52 @@ foreach (var (say, want) in CASES)
     var matches = await router.RouteAsync(say);
     var took = (total.Elapsed - t0).TotalSeconds;
 
-    var got = matches.Count > 0 ? matches[0].Tool.Id : "(없음)";
-    var hit1 = got == want;
-    var hit3 = matches.Take(3).Any(m => m.Tool.Id == want);
-    if (hit1) top1++;
-    if (hit3) top3++;
+    // ── TeavelSession.HandleUtteranceAsync 의 판단을 그대로 흉내낸다 ──
+    string mark, note;
+    if (matches.Count == 0)
+    {
+        lost++;
+        mark = "못알아들음"; note = "";
+    }
+    else
+    {
+        var chosen = matches[0];
+        var asks = chosen.Score < KeywordIntentRouter.ConfidentScore && matches.Count > 1;
+        if (chosen.Source == IntentSource.Model) byModel++;
 
-    // O = 1순위 정답, ~ = 3순위 안에는 있음, X = 놓침
-    Console.WriteLine($"{(hit1 ? "O" : hit3 ? "~" : "X")} {took,5:F1}s  {say}");
-    if (!hit1) Console.WriteLine($"          원함 {want} / 받음 {got}");
+        if (asks)
+        {
+            // 교사에게 최대 5개를 보여 주고 고르게 한다.
+            var shown = matches.Take(5).ToList();
+            if (shown.Any(m => m.Tool.Id == want)) { askedHit++; mark = "골라야함"; note = "정답이 목록에 있음"; }
+            else { askedMiss++; mark = "골라야함"; note = $"목록에 정답 없음 (1순위 {chosen.Tool.Id})"; }
+        }
+        else if (chosen.Tool.Id == want)
+        {
+            ranRight++; mark = "바로실행"; note = "맞음";
+        }
+        else
+        {
+            ranWrong++; mark = "바로실행"; note = $"※ 틀린 도구가 실행됨 → {chosen.Tool.Id}";
+        }
+    }
+
+    var who = matches.Count > 0 ? (matches[0].Source == IntentSource.Model ? "모델" : "낱말") : "  ";
+    Console.WriteLine($"[{mark,-6}] {who} {took,5:F1}s  {say}");
+    if (note.Length > 0 && !note.Equals("맞음")) Console.WriteLine($"             {note}");
 }
 
+var n = CASES.Length;
 Console.WriteLine();
-Console.WriteLine($"{label}: 1순위 {top1}/{CASES.Length} · 3순위 안 {top3}/{CASES.Length} · 총 {total.Elapsed.TotalSeconds:F0}초");
+Console.WriteLine($"── {label} ──");
+Console.WriteLine($"  바로 실행 · 맞음      {ranRight,2}/{n}   ← 교사가 가장 원하는 것");
+Console.WriteLine($"  바로 실행 · 틀림      {ranWrong,2}/{n}   ← 가장 나쁨(고를 기회 없이 엉뚱한 도구)");
+Console.WriteLine($"  골라야 함 · 정답 있음 {askedHit,2}/{n}");
+Console.WriteLine($"  골라야 함 · 정답 없음 {askedMiss,2}/{n}");
+Console.WriteLine($"  못 알아들음           {lost,2}/{n}");
+Console.WriteLine($"  (모델이 답한 문장 {byModel}/{n} · 총 {total.Elapsed.TotalSeconds:F0}초)");
 
-owned?.Dispose();
+llm?.Dispose();
 return 0;
 
 /// <summary>한 문장과 그 문장이 가리켜야 할 도구.</summary>
