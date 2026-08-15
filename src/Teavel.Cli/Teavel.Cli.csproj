@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Teavel.Cli</RootNamespace>
+    <AssemblyName>teavel</AssemblyName>
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Teavel.Core\Teavel.Core.csproj" />
+  </ItemGroup>
+
+  <!--
+    도구 스크립트와 앱 카탈로그는 exe 옆에 그대로 있어야 한다
+    (ToolRunner 는 AppDirectory\scripts\, AppCatalog 는 AppDirectory\catalog\ 를 본다).
+    교사가 스크립트를 열어 무엇을 하는지 확인할 수 있다는 점도 의도한 것이다.
+  -->
+  <ItemGroup>
+    <None Include="..\..\scripts\**\*" Link="scripts\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\..\catalog\**\*" Link="catalog\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

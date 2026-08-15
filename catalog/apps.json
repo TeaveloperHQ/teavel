@@ -1,0 +1,69 @@
+{
+  "$comment": [
+    "teaveloper 앱 카탈로그 — Teavel 이 설치·실행·MCP 연결에 쓰는 선언.",
+    "",
+    "앱에 MCP 를 순차적으로 붙일 예정이므로, 앱마다 'mcp' 는 처음엔 null 이고",
+    "그 앱이 MCP 서버를 갖추면 이 파일에만 채워 넣으면 된다 — Teavel 재빌드가 필요 없다.",
+    "",
+    "install.kind:",
+    "  portal — 포털 안내 페이지를 연다(교사가 직접 내려받음). 직접 링크가 없을 때.",
+    "  zip    — url 의 zip 을 받아 installDir 에 푼다.",
+    "  winget — winget 으로 설치한다(packageId 필요).",
+    "",
+    "mcp.minVersion — 설치된 앱이 이 버전보다 낮으면 MCP 를 붙이지 않는다.",
+    "  (MCP 를 갓 달기 시작한 앱이 옛 버전으로 깔려 있을 때 엉뚱하게 붙는 것을 막는다)",
+    "",
+    "activation — 설치만으로는 못 쓰고 교사 계정에 붙여야 하는 앱에만 둔다.",
+    "  kind: deviceFlow — 짧은 코드를 보여 주고 교사가 브라우저에서 승인하면,",
+    "  Teavel 이 폴링해 설정 파일을 받아 앱 옆에 써 준다. 비밀번호는 오가지 않는다.",
+    "  (규격: teaveloper-runner 레포의 PORTAL_INTEGRATION.md §4.1)"
+  ],
+
+  "schemaVersion": 1,
+  "updatedAt": "2026-08-09",
+
+  "apps": [
+    {
+      "id": "teaveloper-runner",
+      "name": "Teaveloper 러너",
+      "summary": "내 컴퓨터를 서버로 만들어, 만든 앱(설문·기록·신청)을 학생이 밖에서 쓰게 해 줍니다.",
+      "$installNote": [
+        "포털이 §2.1 배포 매니페스트(모두에게 같은 exe 하나 + sha256)를 올리면",
+        "kind 를 'zip' 으로 바꾸고 url 을 넣는다. 그때 설치까지 무인화된다.",
+        "지금은 교사가 포털에서 직접 내려받는다."
+      ],
+      "install": {
+        "kind": "portal",
+        "portalPage": "https://teaveloper.com",
+        "installDir": "%LOCALAPPDATA%\\Teaveloper\\runner",
+        "exe": "teaveloper-runner.exe"
+      },
+      "activation": {
+        "kind": "deviceFlow",
+        "codeUrl": "https://teaveloper.com/api/device/code",
+        "tokenUrl": "https://teaveloper.com/api/device/token"
+      },
+      "notes": [
+        "활성화는 Teavel 이 해 드립니다 — 브라우저에서 승인만 하시면 됩니다.",
+        "앱 파일은 설치 폴더의 app\\ 안에 넣습니다."
+      ],
+      "mcp": null
+    },
+    {
+      "id": "saenggibu-helper",
+      "name": "생기부 도우미",
+      "summary": "생활기록부 문장을 만들고 다듬습니다. 학생 정보가 컴퓨터 밖으로 나가지 않습니다.",
+      "install": {
+        "kind": "portal",
+        "portalPage": "https://teaveloper.com",
+        "installDir": "%LOCALAPPDATA%\\Teaveloper\\saenggibu",
+        "exe": "생기부도우미.exe"
+      },
+      "notes": [
+        "처음 실행할 때 언어 모델(약 4.7GB)을 내려받습니다.",
+        "'수업메모.exe' 가 함께 설치되어 Ctrl+Alt+M 으로 열립니다."
+      ],
+      "mcp": null
+    }
+  ]
+}

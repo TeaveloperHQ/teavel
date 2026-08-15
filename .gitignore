@@ -1,0 +1,11 @@
+bin/
+obj/
+publish/
+
+# 언어 모델은 저장소에 넣지 않는다(수 GB).
+models/
+*.gguf
+
+# 교사 PC 에서 생기는 것들
+*.user
+.vs/
