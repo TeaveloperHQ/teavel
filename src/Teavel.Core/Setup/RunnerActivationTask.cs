@@ -67,7 +67,10 @@ public sealed class RunnerActivationTask : ISetupTask
             return CheckResult.NeedsFix(
                 "아직 설치돼 있지 않습니다.",
                 app.Summary,
-                "설치와 활성화를 이어서 해 드립니다.");
+                // 할 수 있는 만큼만 말한다 — 카탈로그에 활성화 방법이 없으면 여기까지가 한계다.
+                app.Activation is { IsUsable: true }
+                    ? "설치와 활성화를 이어서 해 드립니다."
+                    : "내려받는 곳까지 안내해 드립니다(활성화는 포털에서 하셔야 합니다).");
 
         var exe = _installer.ExePath(app);
         var config = RunnerHost.ReadConfig(exe);

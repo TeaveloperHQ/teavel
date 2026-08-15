@@ -29,21 +29,30 @@
       "id": "teaveloper-runner",
       "name": "Teaveloper 러너",
       "summary": "내 컴퓨터를 서버로 만들어, 만든 앱(설문·기록·신청)을 학생이 밖에서 쓰게 해 줍니다.",
+      "$todo": [
+        "포털에 device flow(§4.1)와 배포 매니페스트(§2.1)가 배포되면 아래 두 곳을 바꾼다.",
+        "Teavel 재빌드는 필요 없다 — 이 파일만 고치면 된다.",
+        "",
+        "  install.kind      : portal → manifest",
+        "  install.manifestUrl: https://teaveloper.com/api/runner/latest  (추가)",
+        "  activation        : null → {kind:deviceFlow,",
+        "                              codeUrl:  https://teaveloper.com/api/device/code,",
+        "                              tokenUrl: https://teaveloper.com/api/device/token}",
+        "",
+        "그 전까지는 없는 주소를 가리키면 404 로 끝나므로, 지금 실제로 되는 것만 적어 둔다.",
+        "kind=portal 은 안내 페이지를 열고 클릭 순서를 알려 준다(교사가 직접 내려받음).",
+        "activation 이 없으면 러너 항목이 '포털에서 config.json 을 받아 이 폴더에' 로 안내한다."
+      ],
       "install": {
-        "kind": "manifest",
-        "manifestUrl": "https://teaveloper.com/api/runner/latest",
+        "kind": "portal",
         "portalPage": "https://teaveloper.com",
         "installDir": "%LOCALAPPDATA%\\Teaveloper\\runner",
         "exe": "teaveloper-runner.exe"
       },
-      "activation": {
-        "kind": "deviceFlow",
-        "codeUrl": "https://teaveloper.com/api/device/code",
-        "tokenUrl": "https://teaveloper.com/api/device/token"
-      },
+      "activation": null,
       "notes": [
-        "활성화는 Teavel 이 해 드립니다 — 브라우저에서 승인만 하시면 됩니다.",
-        "앱 파일은 설치 폴더의 app\\ 안에 넣습니다."
+        "포털 '내 서버' 에서 묶음(zip)을 받으면 exe·config.json·app\\teaveloper.json 이 함께 들어 있습니다.",
+        "그 묶음을 위 설치 폴더에 그대로 푸세요."
       ],
       "mcp": null
     },
