@@ -5,9 +5,15 @@ using Teavel.Platform;
 namespace Teavel.Apps;
 
 /// <summary>앱을 어떻게 설치하는지.</summary>
-/// <param name="Kind">portal · zip · winget 중 하나.</param>
+/// <param name="Kind">portal · zip · manifest · winget 중 하나.</param>
 /// <param name="PortalPage">kind=portal 일 때 열어 줄 안내 페이지.</param>
 /// <param name="Url">kind=zip 일 때 내려받을 zip 주소.</param>
+/// <param name="ManifestUrl">
+/// kind=manifest 일 때 읽을 배포 매니페스트 주소.
+/// <c>{version, url, sha256, exePath}</c> 를 준다 — zip 과 달리 <b>내려받은 것을
+/// sha256 으로 검증</b>한다. 앱에 코드 서명을 하지 않으므로 이게 위변조를 확인할
+/// 유일한 수단이다.
+/// </param>
 /// <param name="PackageId">kind=winget 일 때 패키지 id.</param>
 /// <param name="InstallDir">설치 폴더(%LOCALAPPDATA% 같은 변수를 써도 된다).</param>
 /// <param name="Exe">설치 폴더 안의 실행 파일 이름. 설치 여부 판단 근거이기도 하다.</param>
@@ -17,7 +23,8 @@ public sealed record AppInstall(
     string? Url,
     string? PackageId,
     string InstallDir,
-    string Exe);
+    string Exe,
+    string? ManifestUrl = null);
 
 /// <summary>
 /// 앱이 제공하는 MCP 서버. 앱에 MCP 가 아직 없으면 카탈로그에서 null 이다.
@@ -142,7 +149,8 @@ public sealed class AppCatalog
                     a.Install.Url,
                     a.Install.PackageId,
                     a.Install.InstallDir ?? "",
-                    a.Install.Exe!),
+                    a.Install.Exe!,
+                    a.Install.ManifestUrl),
                 a.Notes,
                 a.Mcp is null ? null : new McpServerSpec(a.Mcp.Command, a.Mcp.Args, a.Mcp.MinVersion),
                 a.Activation is null
@@ -189,6 +197,7 @@ public sealed class AppCatalog
         public string? PackageId { get; set; }
         public string? InstallDir { get; set; }
         public string? Exe { get; set; }
+        public string? ManifestUrl { get; set; }
     }
 
     private sealed class McpDto

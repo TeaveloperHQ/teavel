@@ -128,6 +128,7 @@ public sealed class RunnerActivationTask : ISetupTask
 
         // ② 활성화 — 이미 설정이 있으면 건드리지 않는다.
         var config = RunnerHost.ReadConfig(exe);
+        int? movedPort = null;   // 포털이 제안한 포트가 막혀 바꿔 잡았으면 그 원래 값
         if (config is not { IsUsable: true })
         {
             if (app.Activation is not { IsUsable: true } spec)
@@ -141,7 +142,9 @@ public sealed class RunnerActivationTask : ISetupTask
 
             try
             {
-                config = await ActivateAsync(spec, exe, ct).ConfigureAwait(false);
+                var activated = await ActivateAsync(spec, exe, ct).ConfigureAwait(false);
+                config = activated.Config;
+                movedPort = activated.MovedFromPort;
             }
             catch (DeviceFlowException ex)
             {
@@ -149,7 +152,8 @@ public sealed class RunnerActivationTask : ISetupTask
             }
 
             done.Add($"활성화됐습니다 — {config.PublicUrl}");
-            if (config.LocalPort != 8080) done.Add($"포트 {config.LocalPort} 로 잡았습니다(다른 포트가 쓰이고 있었습니다).");
+            if (movedPort is { } from)
+                done.Add($"포트 {from} 이(가) 쓰이고 있어 {config.LocalPort} 로 잡았습니다.");
         }
 
         // ③ 자동 실행 — 이미 돼 있으면 그대로 둔다(교사가 꺼 뒀을 수도 있으니 새로 켜지 않는다).
@@ -198,7 +202,11 @@ public sealed class RunnerActivationTask : ISetupTask
 
     // ─────────────────────────────── 활성화 ───────────────────────────────
 
-    private async Task<RunnerConfig> ActivateAsync(ActivationSpec spec, string exePath, CancellationToken ct)
+    /// <param name="Config">저장된 설정.</param>
+    /// <param name="MovedFromPort">포털이 제안한 포트가 막혀 바꿔 잡았으면 그 원래 값.</param>
+    private sealed record Activated(RunnerConfig Config, int? MovedFromPort);
+
+    private async Task<Activated> ActivateAsync(ActivationSpec spec, string exePath, CancellationToken ct)
     {
         using var flow = _flowFactory();
 
@@ -232,10 +240,12 @@ public sealed class RunnerActivationTask : ISetupTask
             ct).ConfigureAwait(false);
 
         // 포털은 교사 PC 에서 어느 포트가 비었는지 알 수 없다 — 그 판단만 여기서 덮어쓴다.
-        config = config with { LocalPort = RunnerHost.PickLocalPort(config.LocalPort) };
+        var suggested = config.LocalPort;
+        var picked = RunnerHost.PickLocalPort(suggested);
+        config = config with { LocalPort = picked };
 
         RunnerHost.WriteConfig(exePath, config);
-        return config;
+        return new Activated(config, picked == suggested ? null : suggested);
     }
 
     private void Say(string line) => _announce?.Invoke(line);

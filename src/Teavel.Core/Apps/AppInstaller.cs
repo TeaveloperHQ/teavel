@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Net.Http.Json;
 using Teavel.Platform;
 using Teavel.Setup;
 
@@ -62,9 +63,10 @@ public sealed class AppInstaller
 
         return app.Install.Kind.ToLowerInvariant() switch
         {
-            "portal" => InstallFromPortal(app),
-            "winget" => await InstallFromWingetAsync(app, ct).ConfigureAwait(false),
-            "zip"    => await InstallFromZipAsync(app, ct).ConfigureAwait(false),
+            "portal"   => InstallFromPortal(app),
+            "winget"   => await InstallFromWingetAsync(app, ct).ConfigureAwait(false),
+            "zip"      => await InstallFromZipAsync(app, ct).ConfigureAwait(false),
+            "manifest" => await InstallFromManifestAsync(app, ct).ConfigureAwait(false),
             _ => FixResult.Failed(
                      $"{app.Name} 의 설치 방식('{app.Install.Kind}')을 알지 못합니다.",
                      "Teavel 을 최신 버전으로 올리면 지원될 수 있습니다."),
@@ -118,21 +120,74 @@ public sealed class AppInstaller
             : FixResult.Failed($"{app.Name} 설치에 실패했습니다.", res.FailureSummary);
     }
 
+    /// <summary>
+    /// 배포 매니페스트를 읽어 설치한다 — zip 과 달리 <b>내려받은 것을 sha256 으로 검증</b>한다.
+    /// </summary>
+    /// <remarks>
+    /// 앱에 코드 서명을 하지 않는 것이 방침이라, 이 해시가 "받은 파일이 포털이 낸 그 파일인지"
+    /// 를 확인할 유일한 수단이다. 검증에 실패하면 <b>설치하지 않고 멈춘다</b> — 교사 PC 에
+    /// 정체 모를 exe 를 푸는 것보다 설치가 안 되는 편이 낫다.
+    /// </remarks>
+    private async Task<FixResult> InstallFromManifestAsync(TeaveloperApp app, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(app.Install.ManifestUrl))
+            return FixResult.Failed($"{app.Name} 의 배포 정보 주소가 카탈로그에 없습니다.");
+
+        RunnerManifest? manifest;
+        try
+        {
+            using var http = _httpFactory();
+            manifest = await http.GetFromJsonAsync<RunnerManifest>(app.Install.ManifestUrl!, ct)
+                                 .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            return FixResult.Failed(
+                $"{app.Name} 의 최신 버전 정보를 가져오지 못했습니다.",
+                ex.Message,
+                "인터넷 연결과 학교 방화벽을 확인해 주세요.");
+        }
+
+        if (manifest is null || string.IsNullOrWhiteSpace(manifest.Url) || string.IsNullOrWhiteSpace(manifest.Sha256))
+            return FixResult.Failed($"{app.Name} 의 배포 정보가 올바르지 않습니다.");
+
+        return await DownloadAndExtractAsync(app, manifest.Url!, manifest.Sha256, manifest.Version, ct)
+                     .ConfigureAwait(false);
+    }
+
     private async Task<FixResult> InstallFromZipAsync(TeaveloperApp app, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(app.Install.Url))
             return FixResult.Failed($"{app.Name} 의 내려받기 주소가 카탈로그에 없습니다.");
 
+        // kind=zip 은 해시가 없다 — 검증 없이 받는다(옛 카탈로그 호환). 새 앱은 manifest 를 쓴다.
+        return await DownloadAndExtractAsync(app, app.Install.Url!, expectedSha256: null, version: null, ct)
+                     .ConfigureAwait(false);
+    }
+
+    private async Task<FixResult> DownloadAndExtractAsync(
+        TeaveloperApp app, string url, string? expectedSha256, string? version, CancellationToken ct)
+    {
         var target = _paths.Expand(app.Install.InstallDir);
         var temp = Path.Combine(Path.GetTempPath(), $"teavel-{app.Id}-{Guid.NewGuid():N}.zip");
 
         try
         {
             using (var http = _httpFactory())
-            await using (var src = await http.GetStreamAsync(app.Install.Url!, ct).ConfigureAwait(false))
+            await using (var src = await http.GetStreamAsync(url, ct).ConfigureAwait(false))
             await using (var dst = File.Create(temp))
             {
                 await src.CopyToAsync(dst, ct).ConfigureAwait(false);
+            }
+
+            if (expectedSha256 is { Length: > 0 })
+            {
+                var actual = await Sha256OfAsync(temp, ct).ConfigureAwait(false);
+                if (!string.Equals(actual, expectedSha256, StringComparison.OrdinalIgnoreCase))
+                    return FixResult.Failed(
+                        $"{app.Name} 을(를) 받았지만 파일이 손상됐거나 바뀌었습니다. 설치하지 않았습니다.",
+                        "받는 도중 끊겼거나, 중간에서 파일이 바뀌었을 수 있습니다.",
+                        "잠시 뒤 다시 시도해 보시고, 계속 그러면 학교 전산 담당 선생님께 알려 주세요.");
             }
 
             Directory.CreateDirectory(target);
@@ -154,10 +209,27 @@ public sealed class AppInstaller
             try { if (File.Exists(temp)) File.Delete(temp); } catch { }
         }
 
-        return IsInstalled(app)
-            ? FixResult.Fixed($"{app.Name} 을(를) 설치했습니다. ({target})")
-            : FixResult.Failed(
+        if (!IsInstalled(app))
+            return FixResult.Failed(
                 $"{app.Name} 을(를) 풀었지만 실행 파일을 찾지 못했습니다.",
                 $"기대한 위치: {ExePath(app)}");
+
+        var what = version is { Length: > 0 } ? $"{app.Name} {version}" : app.Name;
+        return FixResult.Fixed($"{what} 을(를) 설치했습니다. ({target})");
     }
+
+    private static async Task<string> Sha256OfAsync(string path, CancellationToken ct)
+    {
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        await using var fs = File.OpenRead(path);
+        var hash = await sha.ComputeHashAsync(fs, ct).ConfigureAwait(false);
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    /// <summary>배포 매니페스트 — teaveloper-runner PORTAL_INTEGRATION.md §2.1.</summary>
+    private sealed record RunnerManifest(
+        string? Version,
+        string? Url,
+        string? Sha256,
+        string? ExePath);
 }
