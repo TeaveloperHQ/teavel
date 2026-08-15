@@ -13,14 +13,19 @@ using Teavel.Tools;
 //                        아니면 **그대로 실행한다**
 //
 // 여기서 중요한 것 — 언어 모델은 자기 답에 늘 0.8 을 매긴다. 0.55 를 넘으므로
-// **모델이 고르면 교사는 고를 기회 없이 그 도구를 만난다.** 그래서 모델 모드에서
-// '3순위 안에 있었다' 는 위로가 되지 않는다. 2·3순위는 화면에 뜨지 않는다.
+// **모델이 고르면 교사에게는 목록이 뜨지 않는다.** 그래서 모델 모드에서 '3순위 안에
+// 있었다' 는 위로가 되지 않는다. 2·3순위는 화면에 뜨지 않는다.
+//
+// 다만 그것이 곧 사고는 아니다 — RunToolAsync 가 도구 제목·설명을 찍고 인자를 하나씩
+// 물으며, 파일을 바꾸는 도구(18개 중 12개)는 실행 전에 확인을 받는다. 즉 '바로 실행·틀림'
+// 의 실체는 **엉뚱한 화면이 떠서 교사가 빠져나와야 하는 것**이다. 자료가 망가지진 않는다.
 //
 // 그래서 결과를 정확도 대신 **교사가 보는 다섯 가지**로 센다.
 //
 // 쓰는 법:
 //   dotnet run --project tools/Teavel.Eval -- keyword          (모델 없는 PC 재현)
 //   dotnet run --project tools/Teavel.Eval -- model <모델.gguf>
+//   dotnet run --project tools/Teavel.Eval -- guard <모델.gguf> (모델·낱말 불일치 시 고르게)
 //
 // 모델 모드는 llama.cpp 네이티브가 필요하다. **교사 PC 와 같은 Windows 에서 재는 것을
 // 전제로 한다** — 리눅스 개발 머신에서는 LLamaSharp 가 네이티브를 못 올리는 경우가 있다.
@@ -180,7 +185,7 @@ var n = CASES.Length;
 Console.WriteLine();
 Console.WriteLine($"── {label} ──");
 Console.WriteLine($"  바로 실행 · 맞음      {ranRight,2}/{n}   ← 교사가 가장 원하는 것");
-Console.WriteLine($"  바로 실행 · 틀림      {ranWrong,2}/{n}   ← 가장 나쁨(고를 기회 없이 엉뚱한 도구)");
+Console.WriteLine($"  바로 실행 · 틀림      {ranWrong,2}/{n}   ← 엉뚱한 도구 화면이 뜬다(제목을 찍고 인자를 묻는다)");
 Console.WriteLine($"  골라야 함 · 정답 있음 {askedHit,2}/{n}");
 Console.WriteLine($"  골라야 함 · 정답 없음 {askedMiss,2}/{n}");
 Console.WriteLine($"  못 알아들음           {lost,2}/{n}");
