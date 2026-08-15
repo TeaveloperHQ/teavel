@@ -9,6 +9,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Teavel.Core", "src\Teavel.C
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Teavel.Cli", "src\Teavel.Cli\Teavel.Cli.csproj", "{E5B23E7A-F05D-4EF0-83A5-1FC7DC948F06}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{D9523E95-A7FD-49AE-8156-274631418E02}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Teavel.Eval", "tools\Teavel.Eval\Teavel.Eval.csproj", "{C8D4A7FA-924F-4EB0-AACF-9D7F64B1C553}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -26,9 +30,14 @@ Global
 		{E5B23E7A-F05D-4EF0-83A5-1FC7DC948F06}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{E5B23E7A-F05D-4EF0-83A5-1FC7DC948F06}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{E5B23E7A-F05D-4EF0-83A5-1FC7DC948F06}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C8D4A7FA-924F-4EB0-AACF-9D7F64B1C553}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C8D4A7FA-924F-4EB0-AACF-9D7F64B1C553}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C8D4A7FA-924F-4EB0-AACF-9D7F64B1C553}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C8D4A7FA-924F-4EB0-AACF-9D7F64B1C553}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{70BBBB42-09DE-415A-BE78-576B6417AB92} = {D8CC0390-9CCF-4A94-8FE4-39AFC48C53F6}
 		{E5B23E7A-F05D-4EF0-83A5-1FC7DC948F06} = {D8CC0390-9CCF-4A94-8FE4-39AFC48C53F6}
+		{C8D4A7FA-924F-4EB0-AACF-9D7F64B1C553} = {D9523E95-A7FD-49AE-8156-274631418E02}
 	EndGlobalSection
 EndGlobal
