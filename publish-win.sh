@@ -10,8 +10,11 @@
 #   ③ catalog/  — teaveloper 앱 선언. 앱에 MCP 가 붙으면 이 파일만 갱신하면 되고 exe 는 그대로다.
 #
 # 언어 모델(GGUF)은 동봉하지 않는다. 생기부 도우미와 같은 방식으로
-# 앱이 최초 실행 시 내려받는다(`teavel 모델`). 배포 파이프라인은 주소만 심으면 된다:
-#   TEAVEL_GGUF_URL=<핀 고정 읽기전용 주소>
+# 앱이 최초 실행 시 내려받는다(`teavel 모델`).
+#
+# 주소는 TeavelModelConfig.ModelUrl 에 리터럴로 박혀 있다(우리 Azure Blob, 읽기전용 SAS).
+# 여기서 TEAVEL_GGUF_URL 을 켜 봐야 아무 일도 일어나지 않는다 — 그 값은 교사 PC 에서
+# 실행 시점에 읽힌다. 모델을 바꾸려면 그 리터럴을 고치고 다시 배포한다.
 #
 # 사용:  ./publish-win.sh [출력폴더]        (기본: publish/win-x64)
 set -euo pipefail

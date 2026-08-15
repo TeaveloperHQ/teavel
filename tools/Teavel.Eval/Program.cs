@@ -25,7 +25,7 @@ using Teavel.Tools;
 // 쓰는 법:
 //   dotnet run --project tools/Teavel.Eval -- keyword          (모델 없는 PC 재현)
 //   dotnet run --project tools/Teavel.Eval -- model <모델.gguf>
-//   dotnet run --project tools/Teavel.Eval -- guard <모델.gguf> (모델·낱말 불일치 시 고르게)
+//   dotnet run --project tools/Teavel.Eval -- noguard <모델.gguf> (비교용 — 가드 끈 옛 동작)
 //
 // 모델 모드는 llama.cpp 네이티브가 필요하다. **교사 PC 와 같은 Windows 에서 재는 것을
 // 전제로 한다** — 리눅스 개발 머신에서는 LLamaSharp 가 네이티브를 못 올리는 경우가 있다.
@@ -72,8 +72,7 @@ if (args.Length == 0 || args[0] is "-h" or "--help")
     Console.WriteLine("사용법:");
     Console.WriteLine("  keyword                모델이 없는 교사 PC 를 재현");
     Console.WriteLine("  model <모델.gguf>      모델이 있는 교사 PC 를 재현");
-    Console.WriteLine("  guard <모델.gguf>      위와 같되, 모델과 낱말의 1순위가 다르면");
-    Console.WriteLine("                         자동 실행 대신 교사에게 고르게 한다");
+    Console.WriteLine("  noguard <모델.gguf>    비교용 — 불일치 가드를 끈 옛 동작");
     return 2;
 }
 
@@ -89,15 +88,15 @@ if (stale.Count > 0)
 
 LocalLlmIntentRouter? llm = null;
 string label;
-var guard = false;
+var noGuard = false;
 
 if (args[0] == "keyword") label = "모델 없음 (낱말 라우터만)";
-else if (args[0] is "model" or "guard" && args.Length >= 2)
+else if (args[0] is "model" or "noguard" && args.Length >= 2)
 {
     if (!File.Exists(args[1])) { Console.Error.WriteLine($"모델 파일이 없습니다: {args[1]}"); return 2; }
     llm = new LocalLlmIntentRouter(args[1]);
-    guard = args[0] == "guard";
-    label = Path.GetFileNameWithoutExtension(args[1]) + (guard ? " + 가드" : "");
+    noGuard = args[0] == "noguard";
+    label = Path.GetFileNameWithoutExtension(args[1]) + (noGuard ? " (가드 끔)" : "");
 }
 else { Console.Error.WriteLine("인자가 올바르지 않습니다. --help 를 보세요."); return 2; }
 
@@ -106,15 +105,11 @@ var keywords = new KeywordIntentRouter();
 // TeavelSession 이 만드는 것과 같은 라우터. 가드 모드에서는 아래에서 직접 합성한다.
 var router = new LayeredIntentRouter(keywords, llm);
 
-// 가드: 모델이 답했는데 낱말 라우터의 1순위와 다르면, 확신 점수를 문턱 아래로 낮춰
-// 교사에게 고르게 한다(모델 후보를 맨 앞에 둔 목록). 둘이 같으면 그대로 실행.
-//
-// 왜 이런 걸 재는가: 모델이 틀린 4건은 모두 '모델 없을 때는 목록이 떴고 거기에 정답이
-// 있던' 문장이었다. 모델이 상황을 개선한 게 아니라 안전한 선택지를 없앤 셈이다.
-// 다만 이 가드가 맞은 것까지 목록으로 되돌리면 이득이 사라지므로, 재 봐야 안다.
+// 불일치 가드는 이제 LayeredIntentRouter 의 기본 동작이다(24문장 실측으로 채택).
+// noguard 모드는 그 이전 동작을 재현해 견주기 위한 것이다 — 모델 답을 늘 그대로 실행한다.
 async Task<IReadOnlyList<IntentMatch>> RouteAsync(string say)
 {
-    if (!guard) return await router.RouteAsync(say);
+    if (!noGuard) return await router.RouteAsync(say);
 
     var byKeyword = await keywords.RouteAsync(say);
     if (byKeyword.Count > 0 && byKeyword[0].Score >= KeywordIntentRouter.ConfidentScore)
@@ -124,10 +119,7 @@ async Task<IReadOnlyList<IntentMatch>> RouteAsync(string say)
     var byModel = await llm.RouteAsync(say);
     if (byModel.Count == 0) return byKeyword;
 
-    var agree = byKeyword.Count > 0 && byKeyword[0].Tool.Id == byModel[0].Tool.Id;
-    var head = agree ? byModel[0] : byModel[0] with { Score = 0.5 };   // 0.55 미만 → 고르게 함
-
-    var merged = new List<IntentMatch> { head };
+    var merged = new List<IntentMatch> { byModel[0] };   // 가드 없음 — 늘 그대로 실행
     foreach (var k in byKeyword)
         if (!merged.Any(m => m.Tool.Id == k.Tool.Id)) merged.Add(k);
     return merged;

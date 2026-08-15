@@ -21,18 +21,21 @@ public static class TeavelModelConfig
     public const string ModelFilename = "qwen2.5-1.5b-instruct-q4_k_m.gguf";
 
     /// <summary>
-    /// 아직 정해지지 않은 URL 을 나타내는 값.
-    /// 배포 전에 <see cref="ModelUrl"/> 을 포털이 호스팅하는 주소로 바꿔야 한다.
+    /// 모델 내려받을 주소 — 우리 Azure Blob(SAS, 읽기전용) 핀 고정.
+    /// 생기부 도우미(LLLM)의 <c>Core/Config.cs</c> 와 같은 방식이다.
     /// </summary>
-    public const string UnsetUrl = "";
-
-    /// <summary>
-    /// 모델 내려받을 주소. 포털 배포 파이프라인에서 핀 고정 주소로 채운다
-    /// (생기부 도우미처럼 읽기 전용 SAS 를 권장).
-    /// 그전까지는 환경변수 TEAVEL_GGUF_URL 로 지정해 쓸 수 있다.
-    /// </summary>
+    /// <remarks>
+    /// **URL 은 여기 리터럴로 박혀 있어야 한다.** 이 값은 교사 PC 에서 실행 시점에
+    /// 읽히므로, 빌드 파이프라인에서 환경변수를 켜 두는 것으로는 아무 일도 일어나지 않는다.
+    /// 환경변수 <c>TEAVEL_GGUF_URL</c> 은 어디까지나 교사·개발자가 다른 모델로 갈아끼우는
+    /// 용도다(모델을 바꾸려면 이 리터럴을 고치고 다시 배포한다).
+    ///
+    /// SAS 는 읽기 전용(<c>sp=r</c>)이고 배포용 파일이라 공개 소스에 있어도 무방하다 —
+    /// 생기부 도우미도 같은 선택을 했다.
+    /// </remarks>
     public static readonly string ModelUrl =
-        Environment.GetEnvironmentVariable("TEAVEL_GGUF_URL") ?? UnsetUrl;
+        Environment.GetEnvironmentVariable("TEAVEL_GGUF_URL")
+        ?? "https://sgb50013120.blob.core.windows.net/dist/qwen2.5-1.5b-instruct-q4_k_m.gguf?se=2035-12-31T23%3A59%3A59Z&sp=r&spr=https&sv=2026-04-06&sr=b&sig=F%2FKM%2FwECWAb3m5hkeSUNab%2BmEglN3o2%2FPgTPKiPFXb4%3D";
 
     /// <summary>진행률 표시와 '덜 받았는지' 판단에 쓰는 근사 크기(Qwen2.5-1.5B-Instruct Q4_K_M 기준).</summary>
     public const long ModelApproxBytes = 1_117_320_704L;

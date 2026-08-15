@@ -174,6 +174,13 @@ public sealed class LayeredIntentRouter : IIntentRouter
     /// <summary>언어 모델을 쓸 수 있는지(모델 파일이 있는지).</summary>
     public bool ModelAvailable => _model is not null;
 
+    /// <summary>
+    /// 모델과 낱말 라우터의 1순위가 갈렸을 때 모델 후보에 매기는 점수.
+    /// <see cref="KeywordIntentRouter.ConfidentScore"/> 보다 낮아야 한다 — 그래야 CLI 가
+    /// 바로 실행하지 않고 교사에게 고르게 한다.
+    /// </summary>
+    public const double DisagreementScore = 0.5;
+
     public async Task<IReadOnlyList<IntentMatch>> RouteAsync(string utterance, CancellationToken ct = default)
     {
         var byKeyword = await _keywords.RouteAsync(utterance, ct).ConfigureAwait(false);
@@ -186,8 +193,19 @@ public sealed class LayeredIntentRouter : IIntentRouter
         var byModel = await _model.RouteAsync(utterance, ct).ConfigureAwait(false);
         if (byModel.Count == 0) return byKeyword;
 
+        // 두 라우터가 갈리면 넘겨짚지 않는다 — 모델 답을 맨 앞에 둔 목록을 보여 주고
+        // 교사가 고르게 한다.
+        //
+        // 근거(24문장 실측, tools/Teavel.Eval): 이 가드가 없으면 모델이 4건을 틀리게
+        // '바로 실행' 하는데, 그 4건은 **전부 모델이 없었으면 목록이 떠서 교사가 맞게
+        // 골랐을 문장**이었다. 모델이 문제를 푼 게 아니라 안전한 선택지를 없앤 셈이다.
+        // 가드를 넣으면 즉시 정답 17→14 로 3건만 줄면서 틀린 실행 4→0 이 된다.
+        var agree = byKeyword.Count > 0 && byKeyword[0].Tool.Id == byModel[0].Tool.Id;
+        var head = agree ? byModel[0] : byModel[0] with { Score = DisagreementScore };
+
         // 모델이 고른 것을 앞에 두되, 낱말 후보도 남겨 교사가 바꿔 고를 수 있게 한다.
-        var merged = new List<IntentMatch>(byModel);
+        var merged = new List<IntentMatch> { head };
+        merged.AddRange(byModel.Skip(1));
         foreach (var k in byKeyword)
             if (!merged.Any(m => m.Tool.Id == k.Tool.Id))
                 merged.Add(k);
