@@ -174,9 +174,21 @@ public sealed class TeavelSession : IAsyncDisposable
 
         if (_llm is not null)
         {
-            Ui.Ok($"이미 쓸 수 있습니다: {_llm.ModelPath}");
-            Ui.Dim($"      크기: {new FileInfo(_llm.ModelPath).Length / 1024 / 1024}MB");
-            return 0;
+            var mismatch = LocalLlmIntentRouter.DescribeMismatch(_llm.ModelPath);
+
+            if (mismatch is null)
+            {
+                Ui.Ok($"이미 쓸 수 있습니다: {_llm.ModelPath}");
+                Ui.Dim($"      크기: {new FileInfo(_llm.ModelPath).Length / 1024 / 1024}MB");
+                return 0;
+            }
+
+            // 남의 모델을 빌려 쓰는 중이다. 여기서 '이미 있다' 고 끝내면
+            // 생기부 도우미를 쓰는 선생님은 제대로 된 모델을 영영 못 받는다 —
+            // 말을 잘 못 알아듣는데 이유는 알 수 없는 상태가 이어진다.
+            Ui.Warn($"지금은 다른 앱의 모델을 빌려 쓰고 있습니다: {Path.GetFileName(_llm.ModelPath)}");
+            Ui.Dim($"      {mismatch}");
+            Console.WriteLine();
         }
 
         if (!TeavelModelConfig.HasDownloadUrl)

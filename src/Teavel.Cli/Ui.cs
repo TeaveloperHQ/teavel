@@ -82,13 +82,23 @@ public static class Ui
         return line;
     }
 
-    /// <summary>예/아니오를 묻는다. 기본은 '예'.</summary>
+    /// <summary>
+    /// 예/아니오를 묻는다. 그냥 Enter 는 '예'.
+    /// </summary>
+    /// <remarks>
+    /// 입력이 아예 끊긴 경우(파이프로 돌리거나 Ctrl+D)는 <b>'아니오'</b> 로 본다.
+    /// 사람이 Enter 를 누른 것과 아무도 없는 것은 다르다 — 아무도 없는데 파일을 바꾸는
+    /// 작업을 진행하면 안 된다. 자동으로 넘기려면 --yes 를 쓰면 된다.
+    /// </remarks>
     public static bool Confirm(string question)
     {
         while (true)
         {
-            var answer = Ask($"{question} [Y/n] ")?.Trim().ToLowerInvariant();
-            if (string.IsNullOrEmpty(answer) || answer is "y" or "yes" or "ㅇ" or "예" or "네") return true;
+            var line = Ask($"{question} [Y/n] ");
+            if (line is null) return false;          // EOF — 물어볼 사람이 없다
+
+            var answer = line.Trim().ToLowerInvariant();
+            if (answer.Length == 0 || answer is "y" or "yes" or "ㅇ" or "예" or "네") return true;
             if (answer is "n" or "no" or "ㄴ" or "아니오" or "아니요") return false;
         }
     }

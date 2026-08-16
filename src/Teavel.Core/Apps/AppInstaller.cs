@@ -45,21 +45,21 @@ public sealed class AppInstaller
     public CheckResult Check(TeaveloperApp app)
     {
         if (!IsInstalled(app))
-            return CheckResult.NeedsFix($"{app.Name} 이(가) 설치돼 있지 않습니다.", app.Summary);
+            return CheckResult.NeedsFix("아직 설치돼 있지 않습니다.", app.Summary);
 
         var lines = new List<string> { $"위치: {ExePath(app)}" };
         if (InstalledVersion(app) is { } v) lines.Add($"버전: {v}");
         if (app.ProvidesMcp) lines.Add("이 앱은 Teavel 에서 바로 부릴 수 있습니다(MCP).");
         lines.AddRange(app.Hints);
 
-        return CheckResult.Ok($"{app.Name} 이(가) 설치돼 있습니다.", lines.ToArray());
+        return CheckResult.Ok("설치돼 있습니다.", lines.ToArray());
     }
 
     /// <summary>앱을 설치한다. 방식은 카탈로그의 install.kind 가 정한다.</summary>
     public async Task<FixResult> InstallAsync(TeaveloperApp app, CancellationToken ct = default)
     {
         if (IsInstalled(app))
-            return FixResult.AlreadyOk($"{app.Name} 은(는) 이미 설치돼 있습니다.");
+            return FixResult.AlreadyOk("이미 설치돼 있습니다.");
 
         return app.Install.Kind.ToLowerInvariant() switch
         {
