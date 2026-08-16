@@ -35,6 +35,9 @@ public static class ToolSelfCheck
         var issues = new List<SelfCheckIssue>();
         var moduleCache = new Dictionary<string, Dictionary<string, HashSet<string>>>(StringComparer.OrdinalIgnoreCase);
 
+        // 모듈별 Export-ModuleMember 목록. Export 문이 아예 없으면 null(그때는 전부 내보내진다).
+        var moduleExports = new Dictionary<string, HashSet<string>?>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var tool in ToolCatalog.All)
         {
             if (!moduleCache.TryGetValue(tool.Module, out var functions))
@@ -65,6 +68,18 @@ public static class ToolSelfCheck
                 continue;
             }
 
+            // 정의만 하고 Export-ModuleMember 에 안 넣으면 모듈 밖에서 부를 수 없다.
+            // 파일만 훑으면 함수가 '있으니' 통과해 버리는데, 교사 PC 에서는
+            // "기능을 찾지 못했습니다" 로 끝난다 — 실제로 한 번 놓친 적이 있다.
+            if (!moduleExports.TryGetValue(tool.Module, out var exported))
+                moduleExports[tool.Module] = exported =
+                    ParseExports(File.ReadAllText(Path.Combine(scriptsDirectory, tool.Module + ".psm1")));
+
+            if (exported is not null && !exported.Contains(tool.Function))
+                issues.Add(new SelfCheckIssue(tool.Id,
+                    $"'{tool.Function}' 이(가) {tool.Module}.psm1 의 Export-ModuleMember 에 없습니다. "
+                  + "정의는 돼 있지만 모듈 밖에서 부를 수 없습니다."));
+
             foreach (var p in tool.Parameters)
                 if (!declared.Contains(p.Name))
                     issues.Add(new SelfCheckIssue(tool.Id,
@@ -77,6 +92,35 @@ public static class ToolSelfCheck
             issues.Add(new SelfCheckIssue(dup.Key, $"같은 id 의 도구가 {dup.Count()}개 선언돼 있습니다."));
 
         return issues;
+    }
+
+    /// <summary>
+    /// Export-ModuleMember -Function 에 적힌 이름들을 뽑는다.
+    /// Export 문이 아예 없으면 null — 그때는 PowerShell 이 모든 함수를 내보내므로 따질 것이 없다.
+    /// </summary>
+    private static HashSet<string>? ParseExports(string source)
+    {
+        var at = source.IndexOf("Export-ModuleMember", StringComparison.OrdinalIgnoreCase);
+        if (at < 0) return null;
+
+        // 줄 끝 백틱으로 이어지는 여러 줄 형태를 그대로 받는다.
+        var tail = source[at..];
+        var end = 0;
+        while (end < tail.Length)
+        {
+            var nl = tail.IndexOf('\n', end);
+            if (nl < 0) { end = tail.Length; break; }
+
+            var line = tail[end..nl].TrimEnd('\r', ' ', '\t');
+            end = nl + 1;
+            if (!line.EndsWith('`')) break;   // 이어지지 않으면 여기까지
+        }
+
+        var names = Regex.Matches(tail[..end], @"[A-Za-z][\w-]*-[A-Za-z][\w-]*")
+            .Select(m => m.Value)
+            .Where(n => !n.Equals("Export-ModuleMember", StringComparison.OrdinalIgnoreCase));
+
+        return new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>모듈 원문에서 (함수 이름 → 매개변수 이름들) 을 뽑는다.</summary>
