@@ -49,6 +49,7 @@ public sealed class SetupCatalog
         _tasks = new List<(SetupStage, ISetupTask)>
         {
             // ① 계정 — 이 하나가 나머지의 뿌리다.
+            (SetupStage.Account, new ComputerNameTask(runner)),
             (SetupStage.Account, new WindowsAccountTask(runner)),
             (SetupStage.Account, new OneDriveSignInTask(facts, proc)),
             (SetupStage.Account, new OfficeSignInTask(facts, proc, paths)),
@@ -89,7 +90,7 @@ public sealed class SetupCatalog
     /// <summary>단계 이름.</summary>
     public static string StageName(SetupStage stage) => stage switch
     {
-        SetupStage.Account => "① 계정 — 학교 계정으로 이어 두기",
+        SetupStage.Account => "① 이 컴퓨터와 계정 — 먼저 정해 둘 것",
         SetupStage.Backup => "② 자료 지키기 — 잃어버리지 않게",
         SetupStage.Programs => "③ 프로그램 — 쓸 것들 갖추기",
         SetupStage.Printing => "④ 인쇄",
@@ -156,8 +157,8 @@ public sealed class OneDriveSignInTask : ISetupTask
     }
 
     public string Id => "onedrive.signin";
-    public string Title => "OneDrive 학교 계정 로그인";
-    public string Why => "여기에 로그인해야 자료가 학교 계정에 백업되고, 다른 컴퓨터에서도 열립니다.";
+    public string Title => "OneDrive 로그인";
+    public string Why => "여기에 로그인해야 자료가 백업되고, 다른 컴퓨터에서도 열립니다.";
 
     public Task<CheckResult> CheckAsync(CancellationToken ct = default)
     {
@@ -179,14 +180,20 @@ public sealed class OneDriveSignInTask : ISetupTask
             return Task.FromResult(CheckResult.Ok("학교 계정으로 로그인돼 있습니다.", lines.ToArray()));
         }
 
-        // 개인 계정만 붙어 있는 경우가 흔하다 — 그건 학교 자료 백업이 아니다.
+        // 개인 계정으로 쓰는 선생님도 많다 — 학교에서 M365 계정을 안 주는 경우가 있다.
+        // 그걸 '잘못된 상태' 로 몰면 고칠 수도 없는 빨간불만 남는다. 백업은 되고 있으므로
+        // 정상으로 보되, 학생 자료를 개인 저장소에 두는 것의 뜻은 분명히 적어 둔다.
         var personal = _facts.OneDrivePersonalFolder;
         return Task.FromResult(personal is not null
-            ? CheckResult.NeedsFix(
-                "개인 OneDrive 만 연결돼 있습니다. 학교 계정이 없습니다.",
-                $"지금 연결된 개인 폴더: {personal}",
-                "학교 자료는 학교 계정에 저장해야 합니다.")
-            : CheckResult.NeedsFix("OneDrive 에 로그인돼 있지 않습니다."));
+            ? CheckResult.Ok(
+                "개인 Microsoft 계정으로 로그인돼 있습니다.",
+                $"동기화 폴더: {personal}",
+                "",
+                "학교에서 받은 M365 계정이 있으시면 그쪽이 낫습니다 —",
+                "학생 개인정보가 든 자료는 학교 계정에 두는 편이 안전합니다.")
+            : CheckResult.NeedsFix(
+                "OneDrive 에 로그인돼 있지 않습니다.",
+                "학교 계정이든 개인 Microsoft 계정이든, 로그인해 두면 자료가 백업됩니다."));
     }
 
     public Task<FixResult> FixAsync(CancellationToken ct = default)

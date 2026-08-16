@@ -125,7 +125,10 @@ function Get-TeavelWindowsInfo {
 function Get-TeavelAccountGuide {
     param(
         [ValidateSet('school', 'personal', 'unknown')]
-        [string] $Ownership = 'unknown'
+        [string] $Ownership = 'unknown',
+
+        [ValidateSet('school', 'personal', 'unknown')]
+        [string] $Account = 'unknown'
     )
 
     $f = Get-TeavelSystemFacts
@@ -143,6 +146,24 @@ function Get-TeavelAccountGuide {
         $d.Add('이미 연결돼 있어 더 하실 일이 없습니다.')
         $d.Add('원드라이브나 아웃룩이 여전히 로그인을 물으면 그 앱만 따로 점검하세요.')
         return New-TeavelResult -Message '학교 계정이 이미 연결돼 있습니다.' -Details $d
+    }
+
+    # 학교에서 M365 계정을 안 주는 경우가 있다(기간제·강사 등).
+    # 그때는 '회사 또는 학교 액세스' 가 아니라 앱마다 개인 계정으로 로그인한다 —
+    # Windows 판도 PC 주인도 따질 것 없이 답이 정해지므로 먼저 갈라낸다.
+    if ($Account -eq 'personal') {
+        $d.Add('학교 계정이 없으시면 개인 Microsoft 계정으로 앱을 쓰시면 됩니다.')
+        $d.Add('Windows 로그인은 지금 쓰시는 그대로 두고, 앱만 연결합니다.')
+        $d.Add('')
+        $d.Add('  · 원드라이브 — 실행하고 개인 메일 주소로 로그인')
+        $d.Add('  · 워드·엑셀  — 오른쪽 위 [로그인] 에 같은 주소로 로그인')
+        $d.Add('  · 아웃룩     — 계정 추가에서 같은 주소 입력')
+        $d.Add('')
+        $d.Add('※ [회사 또는 학교 액세스] 는 쓰지 마세요. 그건 학교 계정용입니다.')
+        $d.Add('※ 학생 개인정보가 든 자료는 되도록 개인 저장소에 두지 마세요.')
+        $d.Add('   나중에 학교 계정이 생기면 그때 옮기시는 편이 좋습니다.')
+
+        return New-TeavelResult -Message '개인 Microsoft 계정으로 앱을 연결하시면 됩니다.' -Details $d
     }
 
     $d.Add('학교 계정을 넣는 방법은 두 가지이고, 결과가 다릅니다.')
@@ -204,6 +225,9 @@ function Get-TeavelAccountGuide {
         $d.Add('  내가 산 개인 컴퓨터   →  ① 계정 추가')
         $d.Add('')
         $d.Add('잘 모르시겠으면 ① 계정 추가로 하세요. 되돌리기 쉽고, 수업에 필요한 것은 다 됩니다.')
+        $d.Add('')
+        $d.Add('학교에서 받은 메일 주소(M365 계정)가 없으시면 알려 주세요 —')
+        $d.Add('개인 Microsoft 계정으로 쓰는 방법을 따로 안내해 드립니다.')
         $msg = '이 컴퓨터가 학교 것인지 개인 것인지 알려 주시면 정확히 안내해 드립니다.'
     }
 
@@ -386,6 +410,145 @@ function Add-TeavelPrinter {
     )
 }
 
+# ═══════════════════════════ 컴퓨터 이름 ═══════════════════════════
+
+<#
+.SYNOPSIS
+    이 컴퓨터의 이름과, 그것이 공장 기본값인지 알려준다. 아무것도 바꾸지 않는다.
+.DESCRIPTION
+    Windows 를 처음 켜면 DESKTOP-A1B2C3D 같은 이름이 자동으로 붙는다.
+    그대로 두면 학교에서 어느 기계인지 분간이 안 되고, Teams·OneDrive·자산 목록에도
+    그 이름이 그대로 뜬다. 선생님이 스스로 바꾸는 일은 거의 없다.
+#>
+function Get-TeavelComputerName {
+    param()
+
+    $key    = 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName'
+    $active = ''
+    $next   = ''
+    try { $active = [string](Get-ItemProperty "$key\ActiveComputerName" -Name ComputerName -EA SilentlyContinue).ComputerName } catch { }
+    try { $next   = [string](Get-ItemProperty "$key\ComputerName"       -Name ComputerName -EA SilentlyContinue).ComputerName } catch { }
+    if (-not $active -and $env:COMPUTERNAME) { $active = [string]$env:COMPUTERNAME }
+
+    # 이름을 아예 못 읽었으면 '기본값이 아니다' 로 넘기면 안 된다 — 모른다고 말해야 한다.
+    if (-not $active) {
+        return New-TeavelResult -Message '컴퓨터 이름을 확인하지 못했습니다.' -Details @(
+            '레지스트리에서도 환경 변수에서도 이름을 읽지 못했습니다.',
+            'Windows 가 아니거나, 읽을 권한이 없는 상태일 수 있습니다.'
+        )
+    }
+
+    # 설치할 때 자동으로 붙는 꼴 — DESKTOP-XXXXXXX / WIN-XXXXXXXXXXX
+    $looksDefault = $active -match '^(DESKTOP|WIN|PC)-[A-Z0-9]{6,}$'
+
+    # 이름 바꾸기를 권하면 안 되는 상태인지(학교가 관리하는 PC)
+    $f = Get-TeavelSystemFacts
+    $managed = $f.AzureAdJoined -or $f.DomainJoined
+
+    $d = New-Object System.Collections.Generic.List[string]
+    $d.Add("지금 이름: $active")
+    if ($next -and $next -ne $active) {
+        $d.Add("바뀔 이름: $next  — 다시 시작하면 적용됩니다.")
+    }
+
+    if ($managed) {
+        $d.Add('')
+        $d.Add('이 컴퓨터는 학교가 관리하는 상태입니다(도메인·조직 연결).')
+        $d.Add('이름을 함부로 바꾸면 학교 자원 접근이 끊길 수 있습니다 — 전산 담당 선생님께 문의하세요.')
+    }
+    elseif ($looksDefault) {
+        $d.Add('')
+        $d.Add('설치할 때 자동으로 붙은 이름 그대로입니다.')
+        $d.Add('학교에서 어느 컴퓨터인지 알아보기 어렵고, Teams·원드라이브에도 이 이름이 뜹니다.')
+    }
+
+    $msg = if ($next -and $next -ne $active) { "이름이 '$next' 로 바뀔 예정입니다. 다시 시작해 주세요." }
+           elseif ($managed)                 { "컴퓨터 이름은 '$active' 입니다. (학교 관리 PC)" }
+           elseif ($looksDefault)            { "컴퓨터 이름이 '$active' — 아직 정하지 않은 이름입니다." }
+           else                              { "컴퓨터 이름은 '$active' 입니다." }
+
+    New-TeavelResult -Message $msg -Details $d
+}
+
+<#
+.SYNOPSIS
+    컴퓨터 이름을 바꾼다. 관리자 확인 창(UAC)이 한 번 뜬다.
+.DESCRIPTION
+    이름 바꾸기는 관리자 권한이 필요하다. Teavel 은 교사 계정으로 돌기 때문에,
+    승격된 프로세스를 하나 띄워 거기서 바꾼다 — 선생님은 [예] 를 한 번 누르면 된다.
+
+    바꾼 이름은 다시 시작해야 적용된다. 여기서 다시 시작시키지는 않는다.
+.PARAMETER NewName
+    새 이름. 영문자·숫자·붙임표(-)만 쓸 수 있고 15자 이내여야 한다.
+    한글은 쓸 수 없다 — 네트워크에서 컴퓨터를 찾지 못하는 문제가 생긴다.
+#>
+function Set-TeavelComputerName {
+    param(
+        [Parameter(Mandatory)][string] $NewName
+    )
+
+    $name = $NewName.Trim()
+
+    # ── 이름 규칙 ── 여기서 막지 않으면 네트워크 이름 해석이 조용히 망가진다.
+    if ($name.Length -eq 0)  { throw '새 이름을 알려주셔야 합니다.' }
+    if ($name.Length -gt 15) { throw "컴퓨터 이름은 15자를 넘을 수 없습니다. ('$name' 은 $($name.Length)자)" }
+    if ($name -match '[가-힣]') {
+        throw "컴퓨터 이름에 한글은 쓸 수 없습니다. 영문으로 지어 주세요. (예: 2-3-kimminsu)"
+    }
+    if ($name -notmatch '^[A-Za-z0-9-]+$') {
+        throw "컴퓨터 이름에는 영문자·숫자·붙임표(-)만 쓸 수 있습니다. 빈칸이나 밑줄은 안 됩니다. (받은 값: $name)"
+    }
+    if ($name -match '^\d+$')      { throw '숫자만으로는 이름을 지을 수 없습니다.' }
+    if ($name -match '^-|-$')      { throw '이름의 처음이나 끝에 붙임표(-)를 둘 수 없습니다.' }
+
+    $current = [string]$env:COMPUTERNAME
+    if ($name -ieq $current) {
+        return New-TeavelResult -Message "이미 '$current' 입니다. 바꿀 것이 없습니다."
+    }
+
+    # ── 학교가 관리하는 PC 는 건드리지 않는다 ──
+    $f = Get-TeavelSystemFacts
+    if ($f.AzureAdJoined -or $f.DomainJoined) {
+        throw ('이 컴퓨터는 학교가 관리하는 상태(도메인·조직 연결)입니다. ' +
+               '이름을 바꾸면 학교 자원 접근이 끊길 수 있어 Teavel 이 바꾸지 않습니다. ' +
+               '전산 담당 선생님께 문의해 주세요.')
+    }
+
+    # ── 관리자 권한으로 한 번만 승격 ──
+    $quoted = $name -replace "'", "''"
+    try {
+        $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -WindowStyle Hidden `
+             -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
+                           "Rename-Computer -NewName '$quoted' -Force -ErrorAction Stop"
+    }
+    catch {
+        throw '관리자 확인 창에서 [아니오] 를 누르셨거나 권한을 얻지 못했습니다. 이름을 바꾸지 않았습니다.'
+    }
+
+    if ($null -eq $p -or $p.ExitCode -ne 0) {
+        throw "이름을 바꾸지 못했습니다. 학교 정책으로 막혀 있을 수 있습니다. (종료 코드 $($p.ExitCode))"
+    }
+
+    # ── 실제로 예약됐는지 확인한다 ── 승격된 프로세스가 조용히 실패했을 수 있다.
+    $pending = ''
+    try {
+        $pending = [string](Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName' `
+                            -Name ComputerName -EA SilentlyContinue).ComputerName
+    } catch { }
+
+    if ($pending -ine $name) {
+        throw "이름 바꾸기가 적용되지 않았습니다. 지금 예약된 이름은 '$pending' 입니다."
+    }
+
+    New-TeavelResult -Message "컴퓨터 이름을 '$name' 으로 바꿨습니다." -Details @(
+        "지금 이름: $current  →  다시 시작 후: $name",
+        '',
+        '컴퓨터를 다시 시작해야 적용됩니다. 지금 하시지 않아도 됩니다.',
+        '다시 시작하기 전까지는 예전 이름으로 보입니다.'
+    )
+}
+
 Export-ModuleMember -Function `
     Get-TeavelSystemFacts, Get-TeavelWindowsInfo, Get-TeavelAccountGuide, Open-TeavelAccountSetting, `
+    Get-TeavelComputerName, Set-TeavelComputerName, `
     Get-PrinterStatus, Set-TeavelDefaultPrinter, Add-TeavelPrinter

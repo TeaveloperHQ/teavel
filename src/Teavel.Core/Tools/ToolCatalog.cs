@@ -403,9 +403,52 @@ public static class ToolCatalog
                     "학교에서 지급한 컴퓨터인지 개인 컴퓨터인지에 따라 해야 할 일이 다릅니다.",
                     Required: false, Default: "unknown",
                     Choices: new[] { "school", "personal", "unknown" }),
+                new ToolParam("Account", ToolParamKind.Choice, "쓰실 계정은",
+                    "학교에서 받은 M365 계정이 있으면 school, 없어서 개인 Microsoft 계정을 "
+                  + "쓰실 거면 personal 입니다. 개인 계정이면 안내가 완전히 달라집니다.",
+                    Required: false, Default: "unknown",
+                    Choices: new[] { "school", "personal", "unknown" }),
             },
             Module: "Teavel.Setup", Function: "Get-TeavelAccountGuide", Mutating: false, TimeoutSeconds: 60)
             { Aliases = new[] { "학교 계정", "계정 추가", "장치 연결", "조인", "회사 또는 학교", "로그인" } },
+
+        // ─────────────────────────── 컴퓨터 이름 ───────────────────────────
+
+        new ToolSpec(
+            Id: "setup.computer_name",
+            Title: "컴퓨터 이름 확인",
+            Category: ToolCategory.Setup,
+            Description: "이 컴퓨터의 이름과, 그것이 아직 공장 기본값인지 알려줍니다. 아무것도 바꾸지 않습니다.",
+            Examples: new[]
+            {
+                "내 컴퓨터 이름이 뭐야",
+                "컴퓨터 이름 확인해줘",
+                "이 컴퓨터 이름 알려줘",
+            },
+            Parameters: Array.Empty<ToolParam>(),
+            Module: "Teavel.Setup", Function: "Get-TeavelComputerName", Mutating: false, TimeoutSeconds: 60)
+            { Aliases = new[] { "컴퓨터 이름", "장치 이름", "PC 이름", "확인" } },
+
+        new ToolSpec(
+            Id: "setup.rename_computer",
+            Title: "컴퓨터 이름 바꾸기",
+            Category: ToolCategory.Setup,
+            Description: "컴퓨터 이름을 새로 정합니다. 관리자 확인 창이 한 번 뜨고, "
+                       + "다시 시작해야 적용됩니다. 학교가 관리하는 컴퓨터는 바꾸지 않습니다.",
+            Examples: new[]
+            {
+                "컴퓨터 이름 바꿔줘",
+                "PC 이름을 2-3-kimminsu 로 바꿔줘",
+                "장치 이름 새로 정하고 싶어",
+            },
+            Parameters: new[]
+            {
+                new ToolParam("NewName", ToolParamKind.Text, "새 컴퓨터 이름",
+                    "영문자·숫자·붙임표(-) 만, 15자 이내. 한글은 쓸 수 없습니다. "
+                  + "예: 2-3-kimminsu, sci-lab-01"),
+            },
+            Module: "Teavel.Setup", Function: "Set-TeavelComputerName", Mutating: true, TimeoutSeconds: 180)
+            { Aliases = new[] { "컴퓨터 이름", "이름 바꾸기", "장치 이름", "PC 이름" } },
 
         // ──────────────────────────── 프린터 ────────────────────────────
         // 세팅 항목이면서 말로 시킬 수 있는 것들. 선생님들이 가장 많이 막히는 자리다.
