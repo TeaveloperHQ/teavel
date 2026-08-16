@@ -1,0 +1,26 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!--
+    Teavel 아이콘 (작은 크기용 — 16·32·48px)
+
+    큰 아이콘에서 프롬프트 꺾쇠를 빼고 죽방만 키웠다.
+    16px 은 가로 16칸이 전부다. 거기에 꺾쇠와 죽방을 같이 넣으면 둘 다 뭉개져서
+    무엇인지 알 수 없는 얼룩이 된다 — 하나만 크게 두는 편이 훨씬 잘 읽힌다.
+
+    비율은 큰 아이콘과 같고(러너 규격 ×1.63 → 여기서 다시 ×1.28) 위치만 가운데로 옮겼다.
+  -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"   stop-color="#6366f1"/>
+      <stop offset="50%"  stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="112" y="112" width="800" height="800" rx="184" fill="url(#g)"/>
+
+  <!-- 죽방 — 원 r113(지름 226) · 밑변 259 · 높이 242, 가운데 정렬 -->
+  <g fill="#ffffff">
+    <circle cx="512" cy="400" r="113"/>
+    <path d="M512 476 L382 718 L642 718 Z"/>
+  </g>
+</svg>

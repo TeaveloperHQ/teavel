@@ -8,6 +8,10 @@
     <RootNamespace>Teavel.Cli</RootNamespace>
     <AssemblyName>teavel</AssemblyName>
     <InvariantGlobalization>false</InvariantGlobalization>
+
+    <!-- 탐색기·작업 표시줄에 뜨는 얼굴. assets/icon.ico 는 16~256px 을 함께 담고 있고,
+         작은 크기(16·32·48)에는 꺾쇠를 뺀 판이 들어 있다. -->
+    <ApplicationIcon>..\..\assets\icon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>

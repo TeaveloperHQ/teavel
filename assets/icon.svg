@@ -1,0 +1,40 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!--
+    Teavel 아이콘 (큰 크기용 — 256px 이상)
+
+    teaveloper 공용 규격:
+      · 800x800 라운드 사각형(rx 184), 112,112 에 배치
+      · 공식 그라데이션 #6366f1 → #8b5cf6 → #06b6d4
+      · 흰색 죽방(竹防) — 원 아래로 삼각이 이어진다
+
+    죽방 비율은 teaveloper-runner/assets/icon.svg 를 그대로 키운 것이다(×1.63).
+    밑변이 원보다 넓고 높이는 원 지름과 비슷해야 한다 — 좁고 길게 그리면
+    죽방이 아니라 열쇠구멍으로 보인다.
+
+    Teavel 만의 것은 왼쪽 프롬프트 꺾쇠다. 이 앱은 트레이에 사는 것이 아니라
+    PowerShell 에서 말을 받는 에이전트라서, "> 죽방" 으로 읽혀야 한다.
+
+    작은 크기(16·32px)는 icon-small.svg 를 쓴다 — 여기서 꺾쇠를 빼고 죽방만 키운 것.
+    두 요소를 16px 에 밀어 넣으면 둘 다 뭉개진다.
+  -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"   stop-color="#6366f1"/>
+      <stop offset="50%"  stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="112" y="112" width="800" height="800" rx="184" fill="url(#g)"/>
+
+  <!-- 프롬프트 꺾쇠 — 죽방의 시각 중심 높이에 맞춘다 -->
+  <path d="M292 404 L400 512 L292 620"
+        fill="none" stroke="#ffffff" stroke-width="64"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- 죽방 — 원 r88(지름 176) · 밑변 202(원보다 넓게) · 높이 189 -->
+  <g fill="#ffffff">
+    <circle cx="646" cy="392" r="88"/>
+    <path d="M646 451 L545 640 L747 640 Z"/>
+  </g>
+</svg>
