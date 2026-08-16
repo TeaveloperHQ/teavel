@@ -27,11 +27,17 @@ function Get-TeavelSystemFacts {
     # EditionID 가 Core 로 시작하면 Home 이다(CoreN, CoreSingleLanguage 등 변종 포함).
     $isHome = $editionId -like 'Core*'
 
+    # 판을 아예 읽지 못한 경우를 따로 둔다.
+    # 이때 '어쨌든 Home 은 아니다' 로 넘기면 장치 연결(②)을 권하게 되는데,
+    # 그건 학교가 그 컴퓨터를 관리하게 되는 길이다 — 모르는 채로 권할 방향이 아니다.
+    $editionKnown = -not [string]::IsNullOrWhiteSpace($editionId)
+
     # 장치를 조직에 연결(Entra ID 조인)하려면 Pro·Enterprise·Education 이어야 한다.
     # Home 은 기능 자체가 없어 설정 화면에 메뉴가 나오지도 않는다.
-    $canJoinDevice = (-not $isHome) -and ($editionId -ne '')
+    $canJoinDevice = $editionKnown -and (-not $isHome)
 
-    $edition = if ($isHome) { 'Home' }
+    $edition = if (-not $editionKnown) { '(확인 못 함)' }
+               elseif ($isHome) { 'Home' }
                elseif ($editionId -like 'Professional*') { 'Pro' }
                elseif ($editionId -like 'Education*')    { 'Education' }
                elseif ($editionId -like 'Enterprise*')   { 'Enterprise' }
@@ -58,6 +64,7 @@ function Get-TeavelSystemFacts {
         ProductName     = $productName
         DisplayVersion  = $display
         IsHome          = $isHome
+        EditionKnown    = $editionKnown
         CanJoinDevice   = $canJoinDevice
         AzureAdJoined   = $azureJoined       # 장치가 조직에 연결됨 — Windows 로그인 자체가 학교 계정
         DomainJoined    = $domainJoined      # 교내 도메인 가입
@@ -80,7 +87,12 @@ function Get-TeavelWindowsInfo {
     $d.Add("$($f.ProductName)  $($f.DisplayVersion)")
     $d.Add('')
 
-    if ($f.IsHome) {
+    if (-not $f.EditionKnown) {
+        $d.Add('이 컴퓨터의 Windows 판을 확인하지 못했습니다.')
+        $d.Add('')
+        $d.Add('학교 계정을 넣으실 때는 "계정 추가" 쪽으로 하세요 — 어느 판에서나 됩니다.')
+    }
+    elseif ($f.IsHome) {
         $d.Add('이 컴퓨터는 Home 판입니다.')
         $d.Add('')
         $d.Add('  · 학교 계정을 "추가" 해서 원드라이브·아웃룩·팀즈를 쓰는 것 — 됩니다.')
@@ -144,7 +156,17 @@ function Get-TeavelAccountGuide {
     $d.Add('               Pro·Education 판에서만 됩니다.')
     $d.Add('')
 
-    if ($f.IsHome) {
+    if (-not $f.EditionKnown) {
+        # 판을 못 읽었다. 되돌리기 쉬운 ① 로 안내하고, 모른다는 사실을 숨기지 않는다.
+        $d.Add('이 컴퓨터의 Windows 판을 확인하지 못했습니다.')
+        $d.Add('그래서 ② 가 되는 컴퓨터인지 알 수 없습니다 — ① 로 하시는 편이 안전합니다.')
+        $d.Add('① 은 어느 판에서나 되고, 마음에 안 들면 되돌리기도 쉽습니다.')
+        $d.Add('')
+        $d.Add('  [설정] → [계정] → [회사 또는 학교 액세스] → [연결]')
+        $d.Add('  → 학교 메일 주소 입력 → 비밀번호 입력 → 끝')
+        $msg = 'Windows 판을 확인하지 못했습니다. 계정 추가(①)로 하세요.'
+    }
+    elseif ($f.IsHome) {
         $d.Add('이 컴퓨터는 Home 판이라 ② 는 아예 불가능합니다. ① 로 하시면 됩니다.')
         $d.Add('')
         $d.Add('  [설정] → [계정] → [회사 또는 학교 액세스] → [연결]')
