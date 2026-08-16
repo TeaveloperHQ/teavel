@@ -48,15 +48,24 @@ public sealed class ProcessRunner : IProcessRunner
 
         if (stdin != null)
         {
+            // 자식이 stdin 을 다 읽기 전에 끝나 버리면 파이프가 먼저 닫힌다.
+            // 그때 나는 예외는 IOException 만이 아니다 — 리눅스에서는 ObjectDisposedException 으로 온다.
+            // 여기서 새어 나가면 도구 하나가 실패하는 것이 아니라 Teavel 이 통째로 죽는다.
+            // 자식이 무엇을 내놓았는지는 아래에서 어차피 읽으므로, 못 쓴 것은 조용히 넘긴다.
             try
             {
-                // PowerShell 래퍼가 JSON 을 UTF-8 로 읽는다.
-                await using var w = new StreamWriter(proc.StandardInput.BaseStream, new UTF8Encoding(false));
-                await w.WriteAsync(stdin.AsMemory(), ct).ConfigureAwait(false);
+                // PowerShell 래퍼가 JSON 을 UTF-8 로 읽는다. StreamWriter 로 감싸면
+                // 그 Dispose 가 BaseStream 을 닫아 아래 Close() 와 이중으로 닫히므로 직접 쓴다.
+                var payload = new UTF8Encoding(false).GetBytes(stdin);
+                await proc.StandardInput.BaseStream.WriteAsync(payload, ct).ConfigureAwait(false);
+                await proc.StandardInput.BaseStream.FlushAsync(ct).ConfigureAwait(false);
             }
-            catch (IOException) { /* 자식이 stdin 을 먼저 닫은 경우 — 무시 */ }
+            catch (IOException) { }
+            catch (ObjectDisposedException) { }
+            catch (NotSupportedException) { }
         }
-        proc.StandardInput.Close();
+
+        try { proc.StandardInput.Close(); } catch { }
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         if (timeout is { } t) timeoutCts.CancelAfter(t);
