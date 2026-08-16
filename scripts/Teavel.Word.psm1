@@ -154,7 +154,7 @@ function New-MergedDocument {
     $details.Add('')
     $details.Add("저장 폴더: $outDir")
 
-    New-TeavelResult -Message "문서 $made개를 만들었습니다. ($Format)" -Details $details
+    New-TeavelResult -Message "문서 $($made)개를 만들었습니다. ($Format)" -Details $details
 }
 
 <#
@@ -228,7 +228,7 @@ function Convert-DocumentToPdf {
         foreach ($s in $skipped) { $details.Add("  $s") }
     }
 
-    New-TeavelResult -Message "$done개를 PDF 로 바꿨습니다." -Details $details
+    New-TeavelResult -Message "$($done)개를 PDF 로 바꿨습니다." -Details $details
 }
 
 Export-ModuleMember -Function New-MergedDocument, Convert-DocumentToPdf

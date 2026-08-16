@@ -102,7 +102,7 @@ function New-BulkMailDraft {
         foreach ($s in $skipped) { $details.Add("  $s") }
     }
 
-    New-TeavelResult -Message "메일 $made통을 $where." -Details $details
+    New-TeavelResult -Message "메일 $($made)통을 $where." -Details $details
 }
 
 <#
@@ -191,10 +191,10 @@ function Save-MailAttachment {
         Close-TeavelOfficeApp $outlook -NoQuit
     }
 
-    $details.Insert(0, "최근 ${Days}일, 첨부가 있는 메일 $mails통을 살펴봤습니다.")
+    $details.Insert(0, "최근 ${Days}일, 첨부가 있는 메일 $($mails)통을 살펴봤습니다.")
     $details.Add("저장 폴더: $outDir")
 
-    New-TeavelResult -Message "첨부 파일 $saved개를 저장했습니다." -Details $details
+    New-TeavelResult -Message "첨부 파일 $($saved)개를 저장했습니다." -Details $details
 }
 
 Export-ModuleMember -Function New-BulkMailDraft, Save-MailAttachment

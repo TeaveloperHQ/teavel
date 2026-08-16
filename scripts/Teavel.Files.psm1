@@ -124,8 +124,8 @@ function Group-FileByStudentId {
 
     $verb = if ($Copy) { '복사' } else { '이동' }
     $details = New-Object System.Collections.Generic.List[string]
-    $details.Add("학번 $($perId.Count)개 폴더로 $moved개 파일을 $verb 했습니다.")
-    if ($noId -gt 0)          { $details.Add("학번을 못 찾은 파일 $noId개는 '학번없음' 폴더에 넣었습니다.") }
+    $details.Add("학번 $($perId.Count)개 폴더로 $($moved)개 파일을 $verb 했습니다.")
+    if ($noId -gt 0)          { $details.Add("학번을 못 찾은 파일 $($noId)개는 '학번없음' 폴더에 넣었습니다.") }
     if ($skipped.Count -gt 0) {
         $details.Add('')
         $details.Add('건너뛴 파일:')
@@ -189,11 +189,11 @@ function Find-MissingSubmission {
 
     $total = $submitted + $missing.Count
     if ($missing.Count -eq 0) {
-        return New-TeavelResult -Message "$total명 모두 냈습니다." -Details @("확인한 파일 $($names.Count)개")
+        return New-TeavelResult -Message "$($total)명 모두 냈습니다." -Details @("확인한 파일 $($names.Count)개")
     }
 
     $details = New-Object System.Collections.Generic.List[string]
-    $details.Add("낸 학생 $submitted명 / 전체 $total명")
+    $details.Add("낸 학생 $($submitted)명 / 전체 $($total)명")
     $details.Add('')
     $details.Add('안 낸 학생:')
     foreach ($m in $missing) { $details.Add("  $m") }
@@ -237,7 +237,7 @@ function Expand-ArchiveBatch {
         try {
             Expand-Archive -LiteralPath $a.FullName -DestinationPath $dest -Force -ErrorAction Stop
             $count = @(Get-ChildItem -LiteralPath $dest -Recurse -File).Count
-            $done.Add("$($a.Name) → $($a.BaseName)\  ($count개)")
+            $done.Add("$($a.Name) → $($a.BaseName)\  ($($count)개)")
 
             if ($DeleteAfter) {
                 Remove-Item -LiteralPath $a.FullName -Force -ErrorAction Stop
@@ -252,7 +252,7 @@ function Expand-ArchiveBatch {
     foreach ($d in $done) { $details.Add($d) }
     if ($deleted -gt 0) {
         $details.Add('')
-        $details.Add("압축 파일 $deleted개를 지웠습니다.")
+        $details.Add("압축 파일 $($deleted)개를 지웠습니다.")
     }
     if ($skipped.Count -gt 0) {
         $details.Add('')

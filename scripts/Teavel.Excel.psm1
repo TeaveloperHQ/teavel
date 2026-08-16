@@ -57,7 +57,7 @@ function Get-WorkbookInfo {
                     }
                 }
 
-                $details.Add("[$i] $($ws.Name) — $rows행 x $cols열")
+                $details.Add("[$i] $($ws.Name) — $($rows)행 x $($cols)열")
                 if ($headers.Count -gt 0) { $details.Add("     열: $($headers -join ', ')") }
                 else { $details.Add('     (비어 있음)') }
             }
@@ -67,7 +67,7 @@ function Get-WorkbookInfo {
             }
         }
 
-        New-TeavelResult -Message "시트 $count개를 찾았습니다." -Details $details
+        New-TeavelResult -Message "시트 $($count)개를 찾았습니다." -Details $details
     }
     finally {
         if ($null -ne $book) { try { $book.Close($false) } catch { } ; Remove-TeavelComObject $book }
@@ -232,7 +232,7 @@ function Get-ScoreSummary {
 
         $line = "$Label — {0}명 · 평균 {1:N2} · 표준편차 {2:N2} · 최고 {3:N1} · 최저 {4:N1} · 중앙값 {5:N1}" -f `
                 $n, $mean, $sd, $sorted[-1], $sorted[0], $median
-        if ($bad -gt 0) { $line += "  (숫자가 아닌 칸 $bad개 제외)" }
+        if ($bad -gt 0) { $line += "  (숫자가 아닌 칸 $($bad)개 제외)" }
         $line
     }
 
