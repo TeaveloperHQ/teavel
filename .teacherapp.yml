@@ -1,0 +1,35 @@
+# teaveloper 포털 빌드 선언.
+#
+# 포털은 이 저장소를 받아 도커 안에서 dotnet publish 를 돌리고,
+# 나온 것 중 .exe 하나만 집어 배포한다.
+#
+# ■ exe 하나만 나간다는 점이 중요하다
+#
+# Teavel 은 PowerShell 모듈(scripts\)과 카탈로그(catalog\)가 있어야 도는데,
+# 그것들은 publish 결과 폴더에 함께 놓일 뿐 exe 안에 들어가지 않는다.
+# 포털이 exe 만 집어 가면 교사가 받은 Teavel 은 아무것도 하지 못한다.
+#
+# 그래서 Teavel.Core 가 그 파일들을 EmbeddedResource 로 품고 있고,
+# 처음 쓸 때 %LOCALAPPDATA%\Teaveloper\Teavel\runtime\ 으로 꺼내 놓는다.
+# (src/Teavel.Core/Platform/Payload.cs)
+#
+# exe 옆에 진짜 scripts\ 가 있으면 그쪽을 쓴다 — 직접 빌드해 고쳐 가며 시험할 때다.
+#
+# ■ 언어 모델은 동봉하지 않는다
+#
+# 1GB 가 넘어 exe 에 넣을 수 없다. 교사가 'teavel 모델' 로 받는다.
+# 없어도 낱말로 알아듣고, 있으면 말귀가 좋아진다.
+
+stack: dotnet
+
+# 이 저장소는 .sln 에 여러 프로젝트가 있다. 실행 프로젝트를 못 박아 둔다 —
+# 자동 선택에 맡기면 도구 프로젝트(Teavel.Eval)를 고를 수도 있다.
+entry: src/Teavel.Cli/Teavel.Cli.csproj
+
+# 판 번호는 태그에서 읽는다.
+versionSource: tag
+
+# 콘솔 앱이다. 선생님이 PowerShell 창에서 'teavel' 을 치고 대화한다.
+gui: false
+
+notes: 선생님 컴퓨터를 대신 세팅하고 학교 M365 를 구성해 주는 도구입니다. PowerShell 창에서 씁니다.

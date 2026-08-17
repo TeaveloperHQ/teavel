@@ -16,4 +16,24 @@
     <PackageReference Include="Microsoft.Win32.Registry" Version="5.0.0" />
   </ItemGroup>
 
+
+  <!--
+    scripts\ · catalog\ 를 exe 안에 묻는다.
+
+    포털은 dotnet publish 결과에서 .exe 하나만 집어 배포한다 — 옆에 있던 폴더는 버려진다.
+    그러면 교사가 받은 Teavel 은 PowerShell 모듈이 없어 아무것도 하지 못한다.
+    묻어 두고 처음 쓸 때 꺼내 놓는다(Platform/Payload.cs).
+
+    LogicalName 을 'Teavel.Payload.<폴더>.<파일>' 로 못 박는다 —
+    기본 규칙은 폴더 이름을 점으로 잇고 파일 이름의 점까지 섞어 되짚기 어렵다.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\scripts\*.ps1;..\..\scripts\*.psm1">
+      <LogicalName>Teavel.Payload.scripts.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\catalog\*.json">
+      <LogicalName>Teavel.Payload.catalog.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
 </Project>

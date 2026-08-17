@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using Teavel.Platform;
 
@@ -39,8 +39,14 @@ public sealed class ToolRunner
         _paths = paths;
     }
 
-    /// <summary>도구 스크립트가 놓인 폴더(exe 옆의 scripts\).</summary>
-    public string ScriptsDirectory => Path.Combine(_paths.AppDirectory, "scripts");
+    /// <summary>
+    /// 도구 스크립트가 놓인 폴더.
+    /// </summary>
+    /// <remarks>
+    /// exe 옆에 있으면 그것을 쓰고, 없으면 exe 안에 묻어 둔 것을 꺼내 놓는다 —
+    /// 포털은 exe 하나만 배포하므로 옆 폴더가 없는 것이 오히려 보통이다.
+    /// </remarks>
+    public string ScriptsDirectory => Platform.Payload.Ensure(_paths.AppDirectory, "scripts");
 
     /// <summary>래퍼 스크립트 경로.</summary>
     public string WrapperPath => Path.Combine(ScriptsDirectory, "Invoke-TeavelTool.ps1");

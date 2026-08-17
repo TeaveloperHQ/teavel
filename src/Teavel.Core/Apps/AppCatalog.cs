@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using Teavel.Platform;
 
@@ -119,7 +119,7 @@ public sealed class AppCatalog
     /// <summary>exe 옆의 catalog\apps.json 을 읽는다. 파일이 없으면 빈 카탈로그.</summary>
     public static AppCatalog Load(ISystemPaths paths)
     {
-        var path = Path.Combine(paths.AppDirectory, "catalog", "apps.json");
+        var path = Path.Combine(Platform.Payload.Ensure(paths.AppDirectory, "catalog"), "apps.json");
         return LoadFrom(path);
     }
 

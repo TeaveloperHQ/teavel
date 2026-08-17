@@ -103,7 +103,7 @@ public sealed class SchoolTree
 
     /// <summary>exe 옆의 catalog\m365-tree.json 을 읽는다.</summary>
     public static SchoolTree Load(string appDirectory)
-        => LoadFrom(Path.Combine(appDirectory, "catalog", "m365-tree.json"));
+        => LoadFrom(Path.Combine(Platform.Payload.Ensure(appDirectory, "catalog"), "m365-tree.json"));
 
     /// <summary>지정한 경로에서 읽는다. 파일이 없으면 빈 트리.</summary>
     public static SchoolTree LoadFrom(string path)
