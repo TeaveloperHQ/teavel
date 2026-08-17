@@ -363,33 +363,21 @@ public sealed class TeavelSession : IAsyncDisposable
     {
         Console.WriteLine();
 
-        var kind = LocalLlmIntentRouter.ChatKind.Other;
-        if (_llm is not null)
-        {
-            try
-            {
-                kind = await _llm.ClassifyChatAsync(utterance, ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch
-            {
-                // 결을 못 가려도 할 말은 있다. 여기서 멈추지 않는다.
-            }
-        }
+        // 필요한 말만 한다. 잡담을 잘하는 것이 목적이 아니라,
+        // 해 드릴 수 있는 것으로 데려가는 것이 목적이다.
+        var kind = SmallTalk.Classify(utterance);
 
         switch (kind)
         {
-            case LocalLlmIntentRouter.ChatKind.Greeting:
-                Ui.Plain("  안녕하세요, 선생님. 편하게 말씀하셔도 됩니다.");
-                Ui.Dim("      하시려는 일을 그냥 적어 주시면 그대로 해 드립니다.");
+            case SmallTalkKind.Greeting:
+                Ui.Plain("  안녕하세요, 선생님. 하실 일을 그냥 적어 주시면 됩니다.");
                 break;
 
-            case LocalLlmIntentRouter.ChatKind.Thanks:
-                Ui.Plain("  도움이 되었다니 다행입니다.");
-                Ui.Dim("      더 필요하신 일이 있으면 말씀해 주세요.");
-                return;
+            case SmallTalkKind.Thanks:
+                Ui.Plain("  도움이 되었다니 다행입니다. 더 필요하시면 말씀해 주세요.");
+                return;   // 여기서만은 목록을 안 깐다 — 인사에 안내문을 붙이면 지겹다
 
-            case LocalLlmIntentRouter.ChatKind.Lost:
+            case SmallTalkKind.Lost:
                 Ui.Plain("  그러실 때는 '점검' 부터 해 보시면 좋습니다.");
                 Ui.Dim("      지금 이 컴퓨터에 안 돼 있는 것을 짚어 드립니다.");
                 Console.WriteLine();
@@ -400,49 +388,37 @@ public sealed class TeavelSession : IAsyncDisposable
                 }
                 break;
 
-            case LocalLlmIntentRouter.ChatKind.Capabilities:
-                Ui.Plain("  선생님 대신 손이 많이 가는 일을 해 드립니다.");
-                Ui.Dim("      폴더에서 오른쪽 단추로 여시면 경로를 치지 않으셔도 됩니다.");
-                break;
-
             default:
-                Ui.Plain("  하시려는 일을 조금만 더 알려 주시겠어요?");
-                Ui.Dim("      예: \"2반 엑셀 다 합쳐줘\" · \"안 낸 사람 찾아줘\" · \"반 팀 만들어줘\"");
+                // 우리가 답할 수 없는 이야기다. 아는 척하지 않고 할 수 있는 것만 말한다.
+                Ui.Plain("  그건 제가 답해 드릴 수 있는 일이 아닙니다.");
                 break;
         }
 
-        // 할 수 있는 일을 실제 목록에서 뽑아 보여 준다.
-        // 손으로 적어 두면 도구를 늘렸을 때 여기만 옛말이 된다.
-        //
-        // 다만 카탈로그 순서 그대로 여섯 개를 뽑으면 '등록하기 · 등록 풀기 · 모델 내려받기'
-        // 가 먼저 나온다. 그건 Teavel 을 쓰기 위한 잡일이지 선생님이 하려는 일이 아니다.
-        // 실제로 해 드리는 일부터 보여 준다.
+        ShowWhatWeDo();
+    }
+
+    /// <summary>
+    /// 해 드릴 수 있는 것을 보여 준다.
+    /// </summary>
+    /// <remarks>
+    /// 카탈로그에서 뽑는다 — 손으로 적어 두면 도구를 늘렸을 때 여기만 옛말이 된다.
+    /// 다만 카탈로그 순서 그대로 뽑으면 '등록하기 · 등록 풀기 · 모델 내려받기' 가 먼저
+    /// 나온다. 그건 Teavel 을 쓰기 위한 잡일이지 선생님이 하려는 일이 아니다.
+    /// </remarks>
+    private static void ShowWhatWeDo()
+    {
         var handy = ToolCatalog.All
             .Where(t => t.Category is ToolCategory.Excel or ToolCategory.Files
                                    or ToolCategory.Outlook or ToolCategory.Word)
             .Take(6)
             .ToList();
 
-        // 말을 걸 때마다 같은 목록을 다시 깔면 대화가 아니라 안내문이 된다.
-        // 처음 한 번과, 대놓고 물어보셨을 때만 보여 준다.
-        _chatTurns++;
-        if (_chatTurns > 1 && kind != LocalLlmIntentRouter.ChatKind.Capabilities) return;
-
         Console.WriteLine();
-        Ui.Plain("  이런 것들을 해 드립니다.");
+        Ui.Plain("  제가 해 드릴 수 있는 것은 이런 것들입니다.");
         foreach (var t in handy)
             Ui.Dim($"      · {t.Title}");
         Ui.Dim("      학교 Teams 구성도 합니다. 전부 보시려면 '목록' 이라고 치세요.");
-
-        if (_llm is null)
-        {
-            Console.WriteLine();
-            Ui.Dim("      언어 모델을 받으시면 말투가 달라도 더 잘 알아듣습니다. '모델' 이라고 치시면 받습니다.");
-        }
     }
-
-    /// <summary>말을 몇 번 주고받았는지. 가끔 할 일 쪽으로 돌려 세우는 데 쓴다.</summary>
-    private int _chatTurns;
 
     private async Task RunFlowAsync(ToolSpec tool, IntentMatch match, string utterance, CancellationToken ct)
     {
@@ -939,6 +915,17 @@ public sealed class TeavelSession : IAsyncDisposable
         }
 
         var chosen = matches[0];
+
+        // 말 걸기는 되묻지 않는다.
+        //
+        // 잡담에 "이 중 어떤 것일까요?" 를 내미는 것이 바로 없애려던 그 막다른 길이다.
+        // 되묻는 까닭은 <b>엉뚱한 것을 실행할까 봐</b>인데, 이건 아무것도 실행하지 않고
+        // 할 수 있는 일을 보여 줄 뿐이라 틀려도 손해가 없다.
+        if (chosen.Tool.Id == "teavel.chat")
+        {
+            await RunToolAsync(chosen, utterance, ct).ConfigureAwait(false);
+            return;
+        }
 
         // 확신이 낮으면 넘겨짚지 않고 고르게 한다.
         if (chosen.Score < KeywordIntentRouter.ConfidentScore && matches.Count > 1)

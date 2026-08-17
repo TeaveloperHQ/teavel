@@ -31,7 +31,6 @@ public sealed class LocalLlmIntentRouter : IIntentRouter, IDisposable
     private ModelParams? _params;
     private LlmSession? _picker;    // 도구 고르기 — 도구 목록이 캐시된다
     private LlmSession? _filler;    // 인자 뽑기 — 지시문이 캐시된다
-    private LlmSession? _chatter;   // 말 상대 — 성격이 캐시된다
 
     private readonly SemaphoreSlim _loadGate = new(1, 1);
     private bool _disposed;
@@ -363,105 +362,12 @@ public sealed class LocalLlmIntentRouter : IIntentRouter, IDisposable
         finally { _loadGate.Release(); }
     }
 
-    // ─────────────────────────── 말 상대 ───────────────────────────
-
-    /// <summary>말을 걸어 온 결. 무슨 말을 돌려줄지는 CLI 가 정한다.</summary>
-    public enum ChatKind
-    {
-        /// <summary>인사. "안녕", "안녕하세요"</summary>
-        Greeting,
-        /// <summary>무엇을 할 수 있는지 묻는다. "너 뭐 할 줄 알아?"</summary>
-        Capabilities,
-        /// <summary>막막해한다. "뭘 해야 할지 모르겠어"</summary>
-        Lost,
-        /// <summary>고마움·인사치레. "고마워", "수고했어"</summary>
-        Thanks,
-        /// <summary>그 밖의 말.</summary>
-        Other,
-    }
-
-    /// <summary>
-    /// 도구를 부르는 말이 아닐 때, <b>어떤 결의 말인지만</b> 가려낸다.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// 처음에는 모델에게 직접 대답을 짓게 했다. 1.5B 로는 이렇게 나왔다.
-    /// </para>
-    /// <code>
-    ///   교사: 너 뭐 할 줄 알아?
-    ///   모델: 네, 컴퓨터에 있는 모든 파일과 폴더를 확인해 드릴 수 있습니다.
-    ///         그런 다음 필요한 파일을 선택하여 삭제하거나 복원할 수 있습니다.
-    /// </code>
-    /// <para>
-    /// <b>우리는 파일을 지우지도 복원하지도 않는다.</b> 프롬프트에 "못 하는 일을
-    /// 하겠다고 하지 마라" 라고 적어 두었는데도 그랬다. 작은 모델에게 자유롭게
-    /// 말하게 두면 이런 일이 난다. 그런데 교사는 그 말을 믿고 기다린다.
-    /// </para>
-    /// <para>
-    /// 그래서 <b>모델에게는 고르는 일만 시킨다</b> — 도구를 고르게 하는 것과 똑같은
-    /// 방식이다. 실제로 화면에 나갈 문장은 사람이 쓴 것이라 없는 기능을 약속할 수 없다.
-    /// 이 앱이 "자동으로 못 하는 일은 그런 척하지 않는다" 를 지키는 방법이기도 하다.
-    /// </para>
-    /// </remarks>
-    public async Task<ChatKind> ClassifyChatAsync(string utterance, CancellationToken ct = default)
-    {
-        var chat = await ChatterAsync(ct).ConfigureAwait(false);
-
-        var answer = await chat
-            .AskAsync(utterance, maxTokens: 8, stopAt: new[] { "\n" }, ct)
-            .ConfigureAwait(false);
-
-        foreach (var (word, kind) in Labels)
-            if (answer.Contains(word, StringComparison.Ordinal))
-                return kind;
-
-        return ChatKind.Other;
-    }
-
-    private static readonly (string Word, ChatKind Kind)[] Labels =
-    {
-        ("인사", ChatKind.Greeting),
-        ("기능", ChatKind.Capabilities),
-        ("막막", ChatKind.Lost),
-        ("감사", ChatKind.Thanks),
-    };
-
-    /// <summary>말 상대용 문맥. 말을 걸어 오기 전에는 만들지 않는다.</summary>
-    private async Task<LlmSession> ChatterAsync(CancellationToken ct)
-    {
-        if (_chatter is not null) return _chatter;
-        await EnsureModelAsync(ct).ConfigureAwait(false);
-
-        await _loadGate.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            return _chatter ??= new LlmSession(
-                _weights!, ContextParams(TeavelModelConfig.ChatContextSize), ChatPrompt);
-        }
-        finally { _loadGate.Release(); }
-    }
-
-    /// <summary>고르게만 한다. 도구 고르기 지시문과 같은 꼴이라 작은 모델도 곧잘 한다.</summary>
-    private const string ChatPrompt =
-        """
-        선생님이 한 말이 아래 다섯 가지 중 어느 것인지 낱말 하나로만 답하는 일을 합니다.
-
-        인사 = 안녕, 반가워, 처음이야 같은 인사말
-        기능 = 뭘 할 수 있는지 묻는 말
-        막막 = 뭘 해야 할지 모르겠다는 말
-        감사 = 고맙다, 수고했다 같은 말
-        기타 = 위 넷에 해당하지 않는 말
-
-        낱말 하나만 답하세요. 설명하지 마세요.
-        """;
-
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
         _picker?.Dispose();
         _filler?.Dispose();
-        _chatter?.Dispose();
         _weights?.Dispose();
         _weights = null;
         _loadGate.Dispose();
