@@ -27,9 +27,14 @@ public static class KiwiInstaller
     /// 받아서 푼다. 이미 있으면 아무것도 하지 않는다.
     /// </summary>
     /// <returns>모델이 놓인 폴더.</returns>
+    /// <param name="onStep">
+    /// 지금 무엇을 받는 중인지 알린다. 두 개를 잇달아 받으므로 이것이 없으면
+    /// 진행률이 0%→100% 를 두 번 돌아 <b>다시 시작한 것처럼 보인다</b>(실제로 그렇게 보였다).
+    /// </param>
     public static async Task<string> InstallAsync(
         ISystemPaths paths,
         ModelDownloader.ProgressCallback? progress = null,
+        Action<string>? onStep = null,
         CancellationToken ct = default)
     {
         if (KiwiAssets.FindModel(paths) is { } already) return already;
@@ -43,6 +48,7 @@ public static class KiwiInstaller
         try
         {
             // ① 형태소 모델 — 크다. 여기서 대부분의 시간이 간다.
+            onStep?.Invoke("말뭉치 (1/2)");
             var modelPack = Path.Combine(temp, "kiwi-model.tgz");
             await ModelDownloader.DownloadAsync(
                 modelPack, TeavelModelConfig.KiwiModelUrl,
@@ -59,6 +65,7 @@ public static class KiwiInstaller
                 File.Copy(f, Path.Combine(target, Path.GetFileName(f)), overwrite: true);
 
             // ② 네이티브 — 플랫폼마다 다르다.
+            onStep?.Invoke("분석기 (2/2)");
             var nativePack = Path.Combine(temp, OperatingSystem.IsWindows() ? "kiwi-native.zip" : "kiwi-native.tgz");
             await ModelDownloader.DownloadAsync(
                 nativePack, TeavelModelConfig.KiwiNativeUrl,

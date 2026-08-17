@@ -105,6 +105,38 @@ public static class ToolCatalog
             Aliases = new[] { "모델", "언어 모델", "llm", "다운로드", "내려받기" },
         },
 
+        // ── 말 걸기 ──
+        //
+        // 도구를 부르는 말이 아닐 때 갈 곳이다.
+        //
+        // 이것이 없을 때 모델은 <b>반드시 도구 하나를 골라야만 했다.</b> 그래서
+        // "안녕 대화좀 해보자" 에도 도구 목록이 떴고, 교사는 고를 것이 없어 취소하고,
+        // 다시 말을 걸면 또 같은 목록을 봤다. 말을 알아들으라고 1GB 를 받게 해 놓고
+        // 정작 말을 안 받아 준 셈이다.
+        //
+        // 도구로 등록해 두면 라우터·목록·인자 검증이 전부 그대로 쓰인다.
+        new ToolSpec(
+            Id: "teavel.chat",
+            Title: "그냥 말 걸기",
+            Category: ToolCategory.Setup,
+            Description: "도구를 부르는 말이 아니라 인사·질문·잡담일 때 이것을 고릅니다. "
+                       + "무엇을 해야 할지 모르겠다는 말도 여기입니다.",
+            Examples: new[]
+            {
+                "안녕",
+                "대화 좀 해보자",
+                "너 뭐 할 줄 알아?",
+                "뭘 해야 할지 모르겠어",
+                "고마워",
+            },
+            Parameters: Array.Empty<ToolParam>(),
+            Module: "@flow",
+            Function: "chat",
+            Mutating: false)
+        {
+            Aliases = new[] { "대화", "인사", "잡담", "이야기", "물어보기", "도와줘" },
+        },
+
         // ── 학교 전체 (도구가 아니라 흐름) ──
         //
         // Module 이 "@flow" 인 것은 PowerShell 함수가 아니라 CLI 의 한 판을 가리킨다.

@@ -196,22 +196,31 @@ public sealed class TeavelSession : IAsyncDisposable
             return;
         }
 
-        Ui.Dim("      말의 끝바꿈을 알아보는 부품입니다. 약 96MB 이고 한 번만 받습니다.");
+        Ui.Dim("      말의 끝바꿈을 알아보는 부품입니다. 두 개를 잇달아 받습니다.");
+        Ui.Dim("      받는 양은 약 96MB, 다 풀면 270MB 를 씁니다. 한 번만 받습니다.");
         Ui.Dim("      이것만 있어도 '합쳐줘' 와 '합치기' 를 같은 말로 알아봅니다.");
         Console.WriteLine();
 
         try
         {
             var last = -1;
-            await KiwiInstaller.InstallAsync(_paths, (done, total) =>
-            {
-                if (total <= 0) return;
-                var pct = (int)(done * 100 / total);
-                if (pct == last || pct % 10 != 0) return;
-                last = pct;
-                Ui.Dim($"      {pct}%");
-            }, ct).ConfigureAwait(false);
+            var step = "";
+            await KiwiInstaller.InstallAsync(_paths,
+                progress: (done, total) =>
+                {
+                    if (total <= 0) return;
+                    var pct = (int)(done * 100 / total);
+                    if (pct == last) return;
+                    last = pct;
+                    // 언어 모델 쪽과 같은 방식으로 한 줄을 고쳐 그린다.
+                    // 줄마다 새로 찍으면 10%씩 열한 줄이 쌓여 화면이 지저분해진다.
+                    Console.Write($"\r      {step}  {pct,3}%  ({done / 1024 / 1024}MB / {total / 1024 / 1024}MB)   ");
+                },
+                onStep: name => { step = name; last = -1; Console.WriteLine(); },
+                ct: ct).ConfigureAwait(false);
 
+            Console.WriteLine();
+            Console.WriteLine();
             Ui.Ok("형태소 분석기를 갖췄습니다.");
         }
         catch (OperationCanceledException) { throw; }
@@ -337,7 +346,105 @@ public sealed class TeavelSession : IAsyncDisposable
     }
 
     /// <summary>도구가 아니라 흐름인 것을 실행한다.</summary>
-    private async Task RunFlowAsync(ToolSpec tool, IntentMatch match, CancellationToken ct)
+    /// <summary>
+    /// 도구를 부르는 말이 아닐 때 <b>말을 받아 준다.</b>
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 모델이 없으면 지어내지 않는다. 할 줄 아는 것을 보여 주고 받자고 권하는 편이
+    /// 어설픈 잡담보다 낫다 — 교사가 원하는 것은 결국 일이 되는 것이다.
+    /// </para>
+    /// <para>
+    /// 대화가 길어지면 대화만 하다 끝난다. 그래서 몇 마디에 한 번은
+    /// <b>할 수 있는 일 쪽으로 돌려 세운다.</b>
+    /// </para>
+    /// </remarks>
+    private async Task RunChatAsync(string utterance, CancellationToken ct)
+    {
+        Console.WriteLine();
+
+        var kind = LocalLlmIntentRouter.ChatKind.Other;
+        if (_llm is not null)
+        {
+            try
+            {
+                kind = await _llm.ClassifyChatAsync(utterance, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch
+            {
+                // 결을 못 가려도 할 말은 있다. 여기서 멈추지 않는다.
+            }
+        }
+
+        switch (kind)
+        {
+            case LocalLlmIntentRouter.ChatKind.Greeting:
+                Ui.Plain("  안녕하세요, 선생님. 편하게 말씀하셔도 됩니다.");
+                Ui.Dim("      하시려는 일을 그냥 적어 주시면 그대로 해 드립니다.");
+                break;
+
+            case LocalLlmIntentRouter.ChatKind.Thanks:
+                Ui.Plain("  도움이 되었다니 다행입니다.");
+                Ui.Dim("      더 필요하신 일이 있으면 말씀해 주세요.");
+                return;
+
+            case LocalLlmIntentRouter.ChatKind.Lost:
+                Ui.Plain("  그러실 때는 '점검' 부터 해 보시면 좋습니다.");
+                Ui.Dim("      지금 이 컴퓨터에 안 돼 있는 것을 짚어 드립니다.");
+                Console.WriteLine();
+                if (!AssumeYes && Ui.Confirm("      지금 해 볼까요?"))
+                {
+                    await RunCheckAsync(ct).ConfigureAwait(false);
+                    return;
+                }
+                break;
+
+            case LocalLlmIntentRouter.ChatKind.Capabilities:
+                Ui.Plain("  선생님 대신 손이 많이 가는 일을 해 드립니다.");
+                Ui.Dim("      폴더에서 오른쪽 단추로 여시면 경로를 치지 않으셔도 됩니다.");
+                break;
+
+            default:
+                Ui.Plain("  하시려는 일을 조금만 더 알려 주시겠어요?");
+                Ui.Dim("      예: \"2반 엑셀 다 합쳐줘\" · \"안 낸 사람 찾아줘\" · \"반 팀 만들어줘\"");
+                break;
+        }
+
+        // 할 수 있는 일을 실제 목록에서 뽑아 보여 준다.
+        // 손으로 적어 두면 도구를 늘렸을 때 여기만 옛말이 된다.
+        //
+        // 다만 카탈로그 순서 그대로 여섯 개를 뽑으면 '등록하기 · 등록 풀기 · 모델 내려받기'
+        // 가 먼저 나온다. 그건 Teavel 을 쓰기 위한 잡일이지 선생님이 하려는 일이 아니다.
+        // 실제로 해 드리는 일부터 보여 준다.
+        var handy = ToolCatalog.All
+            .Where(t => t.Category is ToolCategory.Excel or ToolCategory.Files
+                                   or ToolCategory.Outlook or ToolCategory.Word)
+            .Take(6)
+            .ToList();
+
+        // 말을 걸 때마다 같은 목록을 다시 깔면 대화가 아니라 안내문이 된다.
+        // 처음 한 번과, 대놓고 물어보셨을 때만 보여 준다.
+        _chatTurns++;
+        if (_chatTurns > 1 && kind != LocalLlmIntentRouter.ChatKind.Capabilities) return;
+
+        Console.WriteLine();
+        Ui.Plain("  이런 것들을 해 드립니다.");
+        foreach (var t in handy)
+            Ui.Dim($"      · {t.Title}");
+        Ui.Dim("      학교 Teams 구성도 합니다. 전부 보시려면 '목록' 이라고 치세요.");
+
+        if (_llm is null)
+        {
+            Console.WriteLine();
+            Ui.Dim("      언어 모델을 받으시면 말투가 달라도 더 잘 알아듣습니다. '모델' 이라고 치시면 받습니다.");
+        }
+    }
+
+    /// <summary>말을 몇 번 주고받았는지. 가끔 할 일 쪽으로 돌려 세우는 데 쓴다.</summary>
+    private int _chatTurns;
+
+    private async Task RunFlowAsync(ToolSpec tool, IntentMatch match, string utterance, CancellationToken ct)
     {
         switch (tool.Function)
         {
@@ -354,6 +461,10 @@ public sealed class TeavelSession : IAsyncDisposable
                 Console.WriteLine();
                 if (!AssumeYes && !Ui.Confirm("      들어갈까요?")) { Ui.Info("취소했습니다."); return; }
                 await RunM365Async(ct).ConfigureAwait(false);
+                return;
+
+            case "chat":
+                await RunChatAsync(utterance, ct).ConfigureAwait(false);
                 return;
 
             case "install":
@@ -846,11 +957,11 @@ public sealed class TeavelSession : IAsyncDisposable
             chosen = matches[n - 1];
         }
 
-        await RunToolAsync(chosen, ct).ConfigureAwait(false);
+        await RunToolAsync(chosen, utterance, ct).ConfigureAwait(false);
     }
 
     /// <summary>모자란 인자를 묻고, 검증하고, 실행한다.</summary>
-    private async Task RunToolAsync(IntentMatch match, CancellationToken ct)
+    private async Task RunToolAsync(IntentMatch match, string utterance, CancellationToken ct)
     {
         var tool = match.Tool;
 
@@ -859,7 +970,7 @@ public sealed class TeavelSession : IAsyncDisposable
         // 관리자는 'teavel m365' 라는 말을 몰라도 하고 싶은 말로 닿는다.
         if (tool.Module == "@flow")
         {
-            await RunFlowAsync(tool, match, ct).ConfigureAwait(false);
+            await RunFlowAsync(tool, match, utterance, ct).ConfigureAwait(false);
             return;
         }
 

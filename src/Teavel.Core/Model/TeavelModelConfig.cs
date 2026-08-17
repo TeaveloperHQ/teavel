@@ -102,6 +102,18 @@ public static class TeavelModelConfig
     /// </summary>
     public const int FillerContextSize = 768;
 
+    /// <summary>
+    /// 말 상대용 문맥 크기. 앞뒤 몇 마디를 기억해야 해서 인자 뽑기보다 넉넉하다.
+    /// </summary>
+    /// <remarks>
+    /// 오래 기억할수록 좋지만 그만큼 RAM 이고, 첫 응답도 느려진다.
+    /// 교사와의 대화는 몇 마디 만에 "그래서 뭘 해 드릴까요" 로 가야 하므로 길 필요가 없다.
+    /// </remarks>
+    public const int ChatContextSize = 1536;
+
+    /// <summary>말 상대의 답 길이 상한(토큰). 길면 교사가 읽지 않는다.</summary>
+    public const int ChatMaxTokens = 160;
+
     /// <summary>기본 문맥 크기(따로 지정하지 않을 때).</summary>
     public const int ContextSize = PickerContextSize;
 }
