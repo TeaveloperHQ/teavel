@@ -1,0 +1,64 @@
+{
+  "$comment": [
+    "학교 Microsoft 365 기본 트리 — '이 학교는 이런 모양이어야 한다' 는 선언.",
+    "",
+    "Teavel 은 이 파일을 읽어 테넌트의 지금 상태와 대조하고, 없는 것만 만든다.",
+    "카탈로그 기반이라 학교마다 이 파일만 바꾸면 되고 Teavel 재빌드가 필요 없다.",
+    "(catalog/apps.json 과 같은 방식)",
+    "",
+    "■ Teavel 이 하는 순서",
+    "  ① 대조 — 선언한 것 중 무엇이 있고 무엇이 없는지 센다. 아무것도 바꾸지 않는다.",
+    "  ② 미리보기 — 만들 것을 하나씩 이름까지 보여 준다.",
+    "  ③ 확인 — 관리자가 승인해야 진행한다.",
+    "  ④ 적용 — 없는 것만 만든다. 이미 있으면 건드리지 않는다(여러 번 돌려도 안전).",
+    "  ⑤ 보고 — 만든 것·건너뛴 것·실패한 것을 각각 알린다.",
+    "",
+    "■ 이 파일을 채울 때",
+    "  · displayName 에 {학년}·{반} 같은 자리를 쓰면 아래 generate 로 펼쳐진다.",
+    "  · mailNickname 은 메일 주소가 되므로 영문·숫자·붙임표만 쓴다(한글 불가).",
+    "  · 이미 쓰고 있는 그룹 이름과 겹치지 않게 한다 — Teavel 은 이름으로 대조한다.",
+    "",
+    "■ 종류(kind)",
+    "  security   — 보안 그룹. 권한·정책을 묶을 때. 메일 주소 없음.",
+    "  m365       — Microsoft 365 그룹. 공유 사서함·SharePoint 가 딸려 온다.",
+    "  team       — Teams 팀. 만들면 m365 그룹이 함께 생긴다.",
+    "               template: standard | educationClass | educationStaff",
+    "",
+    "아래는 채워 넣기 쉽도록 둔 뼈대다. 실제 학교 구조로 바꿔 주세요."
+  ],
+
+  "schemaVersion": 1,
+  "school": "",
+
+  "$howToGenerate": [
+    "generate 를 두면 그 목록만큼 항목이 펼쳐진다.",
+    "  \"generate\": { \"학년\": [1,2,3], \"반\": [1,2,3,4,5,6,7,8] }",
+    "→ displayName 의 {학년}·{반} 자리에 값이 들어가 24개가 만들어진다.",
+    "generate 가 없으면 그 항목 하나만 만든다."
+  ],
+
+  "groups": [
+    {
+      "$note": "예시 — 실제 구조로 바꿔 주세요.",
+      "id": "class-teams",
+      "kind": "team",
+      "template": "educationClass",
+      "displayName": "{학년}학년 {반}반",
+      "mailNickname": "class-{학년}-{반}",
+      "description": "{학년}학년 {반}반 수업 팀",
+      "visibility": "private",
+      "generate": { "학년": [1, 2, 3], "반": [1, 2, 3, 4, 5, 6] },
+      "owners": [],
+      "members": []
+    },
+    {
+      "$note": "예시 — 교직원 보안 그룹.",
+      "id": "staff-all",
+      "kind": "security",
+      "displayName": "전교직원",
+      "mailNickname": "staff-all",
+      "description": "권한·정책을 묶는 데 쓰는 보안 그룹",
+      "members": []
+    }
+  ]
+}
