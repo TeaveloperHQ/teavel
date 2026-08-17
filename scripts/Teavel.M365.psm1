@@ -67,6 +67,41 @@ function Get-TeavelModuleDirectory {
 
 <#
 .SYNOPSIS
+    상태를 바꾸는 명령을 <b>확인 창 없이</b> 부른다.
+.DESCRIPTION
+    Set-User 같은 명령은 "이 작업을 수행하시겠습니까? [Y/A/N/...]" 를 묻는다.
+    상주 세션에는 답할 사람이 없는데, 더 나쁜 것은 <b>멈추지도 않는다</b>는 점이다 —
+    PowerShell 이 stdin 에서 답을 읽으려 하고, 거기 흘러오는 것은 우리가 보낸
+    <b>다음 명령의 JSON 한 줄</b>이다. 그것을 답으로 먹고 명령 하나가 통째로 사라진다.
+
+    $ConfirmPreference 를 모듈 범위에 두는 것으로는 막히지 않는다(실기 확인).
+    호출마다 -Confirm:$false 를 명시해야 한다.
+
+    그런데 모든 명령이 -Confirm 을 받는 것은 아니다. MicrosoftTeams 의 명령들은
+    받지 않는 것이 있어, 무턱대고 붙이면 '그런 매개변수가 없다' 로 터진다.
+    그래서 받을 수 있을 때만 붙인다.
+.PARAMETER Command
+    부를 명령 이름.
+.PARAMETER Arguments
+    이름 있는 인자들.
+#>
+function Invoke-TeavelWrite {
+    param(
+        [Parameter(Mandatory)][string] $Command,
+        [hashtable] $Arguments = @{}
+    )
+
+    $cmd = Get-Command $Command -ErrorAction Stop
+
+    $p = @{}
+    foreach ($k in $Arguments.Keys) { $p[$k] = $Arguments[$k] }
+    if ($cmd.Parameters.ContainsKey('Confirm')) { $p['Confirm'] = $false }
+
+    & $cmd @p -ErrorAction Stop
+}
+
+<#
+.SYNOPSIS
     M365 작업에 필요한 것이 갖춰졌는지 본다. 아무것도 설치하거나 바꾸지 않는다.
 .DESCRIPTION
     '있는지' 가 아니라 '쓸 만한 판이 있는지' 를 본다 — 너무 낮은 판이 깔려 있으면
@@ -459,7 +494,7 @@ function New-TeavelM365Group {
         if ($tpl)         { $params['Template']    = $tpl }
         if ($Owners.Count -gt 0) { $params['Owner'] = $Owners[0] }
 
-        $team = New-Team @params -ErrorAction Stop
+        $team = Invoke-TeavelWrite -Command 'New-Team' -Arguments $params
         $d.Add("팀을 만들었습니다: $DisplayName")
         if ($tpl) { $d.Add("서식: $tpl") }
         # 부르는 쪽이 이 값으로 곧바로 채널을 붙인다. 형식을 바꾸면 저쪽도 바꿔야 한다.
@@ -467,7 +502,7 @@ function New-TeavelM365Group {
 
         # 소유자가 여럿이면 나머지를 붙인다.
         foreach ($o in ($Owners | Select-Object -Skip 1)) {
-            try { Add-TeamUser -GroupId $team.GroupId -User $o -Role Owner -ErrorAction Stop; $d.Add("소유자 추가: $o") }
+            try { Invoke-TeavelWrite -Command 'Add-TeamUser' -Arguments @{ GroupId = $team.GroupId; User = $o; Role = 'Owner' } | Out-Null; $d.Add("소유자 추가: $o") }
             catch { $d.Add("소유자 추가 실패($o): $($_.Exception.Message)") }
         }
     }
@@ -480,13 +515,13 @@ function New-TeavelM365Group {
         if ($Description) { $params['Notes'] = $Description }
         if ($Owners.Count -gt 0) { $params['Owner'] = $Owners[0] ; $params['Members'] = $Owners[0] }
 
-        $g = New-UnifiedGroup @params -ErrorAction Stop
+        $g = Invoke-TeavelWrite -Command 'New-UnifiedGroup' -Arguments $params
         $d.Add("그룹을 만들었습니다: $DisplayName")
         if ($g.PrimarySmtpAddress) { $d.Add("메일 주소: $($g.PrimarySmtpAddress)") }
 
         foreach ($o in ($Owners | Select-Object -Skip 1)) {
             try {
-                Add-UnifiedGroupLinks -Identity $MailNickname -LinkType Owners -Links $o -ErrorAction Stop
+                Invoke-TeavelWrite -Command 'Add-UnifiedGroupLinks' -Arguments @{ Identity = $MailNickname; LinkType = 'Owners'; Links = $o }
                 $d.Add("소유자 추가: $o")
             } catch { $d.Add("소유자 추가 실패($o): $($_.Exception.Message)") }
         }
@@ -634,7 +669,7 @@ function Set-TeavelDisplayName {
     $before = ''
     try { $before = [string](Get-User -Identity $Identity -ErrorAction Stop).DisplayName } catch { }
 
-    Set-User -Identity $Identity -DisplayName $DisplayName -ErrorAction Stop
+    Invoke-TeavelWrite -Command 'Set-User' -Arguments @{ Identity = $Identity; DisplayName = $DisplayName }
 
     New-TeavelResult -Message "'$before' → '$DisplayName'" -Details @()
 }
@@ -692,7 +727,7 @@ function Sync-TeavelTeamChannel {
     foreach ($name in $wanted) {
         if ($existing -contains $name) { $kept.Add($name); continue }
         try {
-            New-TeamChannel -GroupId $GroupId -DisplayName $name -ErrorAction Stop | Out-Null
+            Invoke-TeavelWrite -Command 'New-TeamChannel' -Arguments @{ GroupId = $GroupId; DisplayName = $name } | Out-Null
             $made.Add($name)
         } catch {
             $failed.Add("$($name): $($_.Exception.Message)")
@@ -744,7 +779,7 @@ function Rename-TeavelM365Group {
     $before = $g.DisplayName
     $d = New-Object System.Collections.Generic.List[string]
 
-    Set-UnifiedGroup -Identity $Identity -DisplayName $NewDisplayName -ErrorAction Stop
+    Invoke-TeavelWrite -Command 'Set-UnifiedGroup' -Arguments @{ Identity = $Identity; DisplayName = $NewDisplayName }
     $d.Add("이름: $before  →  $NewDisplayName")
 
     if ($NewAlias) {
@@ -752,7 +787,7 @@ function Rename-TeavelM365Group {
             throw "별칭에는 영문자·숫자·붙임표·밑줄·점만 쓸 수 있습니다. (받은 값: $NewAlias)"
         }
         $oldSmtp = [string]$g.PrimarySmtpAddress
-        Set-UnifiedGroup -Identity $Identity -Alias $NewAlias -ErrorAction Stop
+        Invoke-TeavelWrite -Command 'Set-UnifiedGroup' -Arguments @{ Identity = $Identity; Alias = $NewAlias }
         $d.Add("별칭: $($g.Alias)  →  $NewAlias")
         $d.Add('')
         $d.Add("옛 메일 주소($oldSmtp)로 오던 메일이 끊길 수 있습니다.")
@@ -810,7 +845,7 @@ function Remove-TeavelM365Group {
         return New-TeavelResult -Message "'$($g.DisplayName)' 을(를) 지우면 다음이 사라집니다." -Details $what
     }
 
-    Remove-UnifiedGroup -Identity $Identity -Confirm:$false -ErrorAction Stop
+    Invoke-TeavelWrite -Command 'Remove-UnifiedGroup' -Arguments @{ Identity = $Identity }
 
     $what.Add('')
     $what.Add('30일 안에는 관리 센터에서 복구할 수 있습니다. 그 뒤에는 되돌릴 수 없습니다.')
@@ -820,7 +855,7 @@ function Remove-TeavelM365Group {
 
 Export-ModuleMember -Function `
     Get-TeavelModuleDirectory, Get-TeavelM365Readiness, Install-TeavelM365Module, `
-    Install-TeavelModuleFromGallery, Connect-TeavelM365, `
+    Install-TeavelModuleFromGallery, Connect-TeavelM365, Invoke-TeavelWrite, `
     Get-TeavelM365Inventory, Get-TeavelTenantUser, `
     Get-TeavelUserName, Set-TeavelDisplayName, `
     New-TeavelM365Group, Sync-TeavelTeamChannel, `

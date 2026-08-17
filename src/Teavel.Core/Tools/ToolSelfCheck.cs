@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 
 namespace Teavel.Tools;
 
@@ -119,6 +119,16 @@ public static class ToolSelfCheck
             // ③ List[object] 를 @() 로 감싸는 것.
             //    실기에서 겪었다(2026-08-17): 엑셀 시트를 다 읽고 마지막 줄에서
             //    '인수 형식이 일치하지 않습니다' 로 터졌다. 목록이 비어 있어도 터진다.
+            // ④ 테넌트를 바꾸는 명령을 확인 창 대비 없이 부르는 것.
+            //    실기에서 겪었다(2026-08-17): Set-User 가 "이 작업을 수행하시겠습니까?" 를 묻는데,
+            //    상주 세션에는 답할 사람이 없다. 멈추지도 않는다 — stdin 에서 답을 읽으려 하고
+            //    거기 흘러오는 것은 우리가 보낸 다음 명령의 JSON 한 줄이라, 명령이 통째로 사라진다.
+            foreach (var call in FindUnconfirmedWrites(source))
+                issues.Add(new SelfCheckIssue(name,
+                    $"'{call}' 을(를) 확인 창 대비 없이 부릅니다. "
+                  + "Invoke-TeavelWrite 로 부르거나 -Confirm:$false 를 붙이세요. "
+                  + "안 그러면 확인 창이 다음 명령을 답으로 먹습니다."));
+
             foreach (var v in FindObjectListWrapping(source))
                 issues.Add(new SelfCheckIssue(name,
                     $"'${v}' 은(는) List[object] 인데 @() 로 감쌉니다. "
@@ -131,6 +141,70 @@ public static class ToolSelfCheck
             issues.Add(new SelfCheckIssue(dup.Key, $"같은 id 의 도구가 {dup.Count()}개 선언돼 있습니다."));
 
         return issues;
+    }
+
+    /// <summary>
+    /// 테넌트를 바꾸는 명령들. 이것들은 확인 창을 띄울 수 있다.
+    /// </summary>
+    /// <remarks>
+    /// 낱말 규칙(Set-*·New-*)으로 잡으면 New-Object·Set-Content 까지 걸려 잔소리가 된다.
+    /// 남의 테넌트를 실제로 바꾸는 것만 적어 둔다.
+    /// </remarks>
+    private static readonly string[] TenantWrites =
+    {
+        "Set-User", "Set-Mailbox", "Set-UnifiedGroup", "New-UnifiedGroup", "Remove-UnifiedGroup",
+        "Add-UnifiedGroupLinks", "Remove-UnifiedGroupLinks",
+        "New-Team", "Set-Team", "Remove-Team", "New-TeamChannel", "Remove-TeamChannel",
+        "Add-TeamUser", "Remove-TeamUser",
+    };
+
+    /// <summary>확인 창 대비 없이 부르는 테넌트 변경 명령들.</summary>
+    /// <remarks>
+    /// 설명글(<c>&lt;# … #&gt;</c>)에도 명령 이름이 나오므로 그것부터 걷어낸다.
+    /// 안 그러면 '이 명령은 확인을 묻는다' 라고 적어 둔 주석이 그대로 걸려 잔소리가 된다.
+    /// </remarks>
+    internal static IEnumerable<string> FindUnconfirmedWrites(string source)
+    {
+        var code = Regex.Replace(source, "<#.*?#>", "", RegexOptions.Singleline);
+        code = Regex.Replace(code, "(?m)#.*$", "");
+
+        foreach (var cmd in TenantWrites)
+        {
+            // 이름 뒤에 글자가 더 붙으면 다른 명령이다(Set-UserPhoto 는 Set-User 가 아니다).
+            var pattern = "(?<![\\w'\\-])" + Regex.Escape(cmd) + "(?![\\w\\-])";
+
+            foreach (Match m in Regex.Matches(code, pattern))
+            {
+                var line = LineAround(code, m.Index);
+                if (line.Contains("-Confirm:$false", StringComparison.OrdinalIgnoreCase)) continue;
+
+                // Invoke-TeavelWrite 가 대신 붙여 준다.
+                if (line.Contains("Invoke-TeavelWrite", StringComparison.Ordinal)) continue;
+
+                yield return cmd;
+                break;
+            }
+        }
+    }
+
+    /// <summary>주어진 자리가 든 논리적 한 줄(백틱으로 이어진 것 포함).</summary>
+    private static string LineAround(string source, int at)
+    {
+        var start = source.LastIndexOf('\n', Math.Min(at, source.Length - 1));
+        start = start < 0 ? 0 : start + 1;
+
+        var end = start;
+        while (true)
+        {
+            var nl = source.IndexOf('\n', end);
+            if (nl < 0) return source[start..];
+
+            // 백틱으로 끝나면 다음 줄까지가 한 줄이다. 여기서 볼 것은 '그 줄' 이지
+            // 파일 처음부터가 아니다 — 그걸 헷갈리면 이어짐을 영영 못 찾는다.
+            if (source[end..nl].TrimEnd().EndsWith('`')) { end = nl + 1; continue; }
+
+            return source[start..nl];
+        }
     }
 
     /// <summary>scripts\ 안의 PowerShell 파일들.</summary>

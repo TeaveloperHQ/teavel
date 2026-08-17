@@ -191,10 +191,17 @@ function Get-User {
     }
     @($script:People.Values)
 }
+<#
+    진짜 Set-User 는 확인을 묻는다(실기에서 확인). 그것을 그대로 흉내 내야
+    -Confirm:$false 를 빠뜨린 것이 시험에서 드러난다.
+#>
 function Set-User {
-    param($Identity, $DisplayName, $ErrorAction)
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
+    param($Identity, $DisplayName)
     if (-not $script:People.ContainsKey($Identity)) { throw "그런 사람이 없습니다: $Identity" }
-    $script:People[$Identity].DisplayName = $DisplayName
+    if ($PSCmdlet.ShouldProcess($Identity, '설정')) {
+        $script:People[$Identity].DisplayName = $DisplayName
+    }
 }
 
 function Add-UnifiedGroupLinks { param($Identity, $LinkType, $Links, $ErrorAction) }
