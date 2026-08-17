@@ -994,16 +994,25 @@ public sealed class M365Flow
             else Ui.Plain($"        {a.ClassKey}  →  {a.Team!.DisplayName}   {a.ToAdd.Count}명{already}");
         }
 
+        // 학생을 넣든 안 넣든 담임은 정해야 한다. 여기서 먼저 나가면 담임 단계가 통째로 건너뛰어진다 —
+        // 채널 맞추기에서 똑같은 실수를 한 적이 있다. 일찍 나가는 길마다 뒷단계를 잃는다.
         var total = assignments.Sum(a => a.ToAdd.Count);
+
         if (total == 0)
         {
             Console.WriteLine();
             Ui.Ok("넣을 사람이 없습니다. 이미 다 들어 있습니다.");
+            await AssignOwnersAsync(host, assignments, have, ct).ConfigureAwait(false);
             return;
         }
 
         Console.WriteLine();
-        if (!_assumeYes && !Ui.Confirm($"      {total}명을 넣을까요?")) { Ui.Info("넣지 않았습니다."); return; }
+        if (!_assumeYes && !Ui.Confirm($"      {total}명을 넣을까요?"))
+        {
+            Ui.Info("넣지 않았습니다.");
+            await AssignOwnersAsync(host, assignments, have, ct).ConfigureAwait(false);
+            return;
+        }
 
         var added = 0;
         var failed = 0;
@@ -1036,6 +1045,129 @@ public sealed class M365Flow
         Ui.Info($"{added}명을 넣었습니다.");
         if (failed > 0) Ui.Warn($"{failed}개 반은 넣지 못했습니다. 다시 실행하면 못 넣은 사람만 다시 시도합니다.");
         Ui.Dim("      학생 화면에 보이기까지 몇 분 걸릴 수 있습니다.");
+
+        await AssignOwnersAsync(host, assignments, have, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 반마다 담임 선생님을 팀 소유자로 넣는다.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 학생만 넣고 끝내면 <b>주인 없는 팀</b>이 된다. 담당 선생님이 팀 설정을 바꾸거나
+    /// 과제를 낼 수 없고, 관리자가 반마다 대신 해 주게 된다.
+    /// </para>
+    /// <para>
+    /// 선생님은 명단이 필요 없다 — 계정이 이미 있으므로 <b>성함만 받아 찾는다.</b>
+    /// 관리자에게 아이디를 묻지 않는다. 아이디는 몰라도 같이 근무하는 선생님 이름은 안다.
+    /// </para>
+    /// <para>
+    /// 반이 스무 개면 스무 번 묻게 되므로 <b>그냥 Enter 로 건너뛸 수 있게</b> 한다.
+    /// 지금 모르는 반은 나중에 다시 실행하면 된다 — 이미 소유자인 분은 건너뛴다.
+    /// </para>
+    /// </remarks>
+    private async Task AssignOwnersAsync(
+        M365Host host,
+        IReadOnlyList<ClassAssignment> assignments,
+        IReadOnlyDictionary<string, IReadOnlyList<TeamMember>> have,
+        CancellationToken ct)
+    {
+        var teams = assignments.Where(a => a.Team is { GroupId.Length: > 0 }).ToList();
+        if (teams.Count == 0 || _assumeYes) return;
+
+        // 이미 소유자가 있는 반은 묻지 않는다.
+        var need = teams.Where(a =>
+            !have.TryGetValue(a.Team!.GroupId, out var m)
+            || !m.Any(x => x.Role.Equals("Owner", StringComparison.OrdinalIgnoreCase))).ToList();
+
+        Console.WriteLine();
+        Ui.Title("⑧ 담임 선생님");
+
+        if (need.Count == 0)
+        {
+            Ui.Ok("모든 반에 담임 선생님이 이미 지정돼 있습니다.");
+            return;
+        }
+
+        Ui.Plain($"""
+              담임 선생님이 없는 반이 {need.Count}개 있습니다.
+
+              담임을 정해 두면 그 선생님이 팀 설정을 바꾸고 과제를 낼 수 있습니다.
+              정해 두지 않으면 그 일을 관리자가 반마다 대신 해야 합니다.
+
+              성함만 적어 주시면 계정은 Teavel 이 찾습니다.
+              모르는 반은 그냥 Enter 로 넘기시고, 나중에 다시 실행하시면 됩니다.
+        """);
+
+        Console.WriteLine();
+        if (!Ui.Confirm("      지금 정하시겠습니까?")) { Ui.Info("나중에 하셔도 됩니다."); return; }
+
+        // 선생님을 찾으려면 학교 사람 목록이 있어야 한다.
+        var people = await ReadPeopleAsync(host, ct).ConfigureAwait(false);
+        if (people.Count == 0)
+        {
+            Ui.Warn("학교 사람 목록을 읽지 못해 선생님을 찾을 수 없습니다.");
+            return;
+        }
+
+        var faculty = UserDirectory.GuessFaculty(UserDirectory.Cluster(people))?.Bundle;
+        var done = 0;
+
+        foreach (var a in need)
+        {
+            Console.WriteLine();
+            var typed = (Ui.Ask($"      {a.ClassKey} 담임 선생님 성함 (모르면 Enter): ") ?? "").Trim();
+            if (typed.Length == 0) { Ui.Dim("      넘어갑니다."); continue; }
+
+            var found = TeacherFinder.Find(people, typed, faculty);
+
+            if (found.Matches.Count == 0)
+            {
+                if (found.Students.Count > 0)
+                    Ui.Warn($"'{typed}' 은(는) 학생 계정으로만 나옵니다. 성함을 다시 확인해 주세요.");
+                else
+                    Ui.Warn($"'{typed}' 으로 찾은 선생님이 없습니다. 성만 넣어 보셔도 됩니다.");
+                continue;
+            }
+
+            var who = found.Matches[0];
+
+            // 한 사람으로 안 좁혀지면 넘겨짚지 않는다 — 엉뚱한 선생님이 남의 반 주인이 된다.
+            if (!TeacherFinder.IsCertain(found.Matches))
+            {
+                Ui.Warn("같은 이름이 여럿입니다. 골라 주세요.");
+                for (var i = 0; i < Math.Min(found.Matches.Count, 5); i++)
+                    Ui.Plain($"        [{i + 1}] {found.Matches[i].User.DisplayName}   {found.Matches[i].User.Upn}");
+
+                var p2 = (Ui.Ask("        번호 (그냥 Enter 면 건너뜀): ") ?? "").Trim();
+                if (!int.TryParse(p2, out var n2) || n2 < 1 || n2 > Math.Min(found.Matches.Count, 5))
+                { Ui.Dim("      넘어갑니다."); continue; }
+                who = found.Matches[n2 - 1];
+            }
+
+            var r = await host.CallAsync("Add-TeavelTeamMember", new Dictionary<string, object?>
+            {
+                ["GroupId"] = a.Team!.GroupId,
+                ["Users"] = new[] { who.User.Upn },
+                ["Role"] = "Owner",
+            }, timeout: TimeSpan.FromMinutes(2), ct: ct).ConfigureAwait(false);
+
+            if (r.Ok) { Ui.Ok($"{a.ClassKey} 담임 — {who.User.DisplayName} ({who.User.Upn})"); done++; }
+            else { Ui.Error($"{a.ClassKey} — {r.Message}"); Ui.Details(r.Details); }
+        }
+
+        Console.WriteLine();
+        Ui.Info($"담임 {done}명을 지정했습니다.");
+        if (done < need.Count)
+            Ui.Dim($"      {need.Count - done}개 반은 나중에 다시 실행해서 정하시면 됩니다.");
+    }
+
+    /// <summary>학교 사람 목록을 읽는다. 실패하면 빈 목록.</summary>
+    private static async Task<IReadOnlyList<TenantUser>> ReadPeopleAsync(M365Host host, CancellationToken ct)
+    {
+        var res = await host.CallAsync("Get-TeavelTenantUser",
+            timeout: TimeSpan.FromMinutes(10), ct: ct).ConfigureAwait(false);
+        return res.Ok ? UserDirectory.Parse(res.Details) : Array.Empty<TenantUser>();
     }
 
     /// <summary>
