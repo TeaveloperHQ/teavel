@@ -752,6 +752,92 @@ function Sync-TeavelTeamChannel {
 
 <#
 .SYNOPSIS
+    팀에 이미 들어 있는 사람들을 읽는다.
+.DESCRIPTION
+    넣기 전에 이것부터 봐야 여러 번 돌려도 안전하다. 학기 중에 전학생이 한 명 왔을 때
+    <b>그 한 명만</b> 넣을 수 있어야 하는데, 지금 누가 있는지 모르면 스물아홉 명을
+    다시 넣으려 들게 된다.
+
+    한 줄이 이렇게 나간다:
+        MEMBER<tab>UPN<tab>역할
+#>
+function Get-TeavelTeamMember {
+    param(
+        [Parameter(Mandatory)][string] $GroupId
+    )
+
+    Import-Module MicrosoftTeams -ErrorAction Stop
+
+    $users = @(Get-TeamUser -GroupId $GroupId -ErrorAction Stop)
+
+    $d = New-Object System.Collections.Generic.List[string]
+    foreach ($u in $users) {
+        $upn = ''
+        try { $upn = [string]$u.User } catch { }
+        if (-not $upn) { continue }
+
+        $role = ''
+        try { $role = [string]$u.Role } catch { }
+
+        $d.Add(("MEMBER`t{0}`t{1}" -f $upn, $role))
+    }
+
+    New-TeavelResult -Message "$($users.Count)명이 들어 있습니다." -Details $d
+}
+
+<#
+.SYNOPSIS
+    팀에 사람들을 넣는다. 이미 들어 있으면 건드리지 않는다.
+.DESCRIPTION
+    한 명씩 넣는다. 한 사람이 실패해도 나머지는 넣어야 하기 때문이다 —
+    스물아홉 명이 들어갈 수 있는데 한 명 때문에 통째로 멈추면 안 된다.
+
+    실패하는 까닭은 대개 둘이다. 계정이 아직 없거나(만들어야 한다),
+    라이선스가 없어서(팀에 넣어도 못 들어온다). 둘 다 그대로 알려 준다.
+.PARAMETER GroupId
+    팀의 그룹 id.
+.PARAMETER Users
+    넣을 사람들의 로그인 아이디.
+.PARAMETER Role
+    Member(학생) 또는 Owner(교사).
+#>
+function Add-TeavelTeamMember {
+    param(
+        [Parameter(Mandatory)][string] $GroupId,
+        [string[]] $Users = @(),
+        [ValidateSet('Member', 'Owner')][string] $Role = 'Member'
+    )
+
+    Import-Module MicrosoftTeams -ErrorAction Stop
+
+    $done   = New-Object System.Collections.Generic.List[string]
+    $failed = New-Object System.Collections.Generic.List[string]
+
+    foreach ($u in $Users) {
+        if (-not $u) { continue }
+        try {
+            Invoke-TeavelWrite -Command 'Add-TeamUser' -Arguments @{
+                GroupId = $GroupId; User = $u; Role = $Role
+            } | Out-Null
+            $done.Add($u)
+        }
+        catch {
+            $failed.Add("$($u) — $($_.Exception.Message)")
+        }
+    }
+
+    $d = New-Object System.Collections.Generic.List[string]
+    foreach ($f in $failed) { $d.Add("실패: $f") }
+
+    if ($failed.Count -gt 0 -and $done.Count -eq 0) {
+        throw "$($failed.Count)명을 모두 넣지 못했습니다. $($failed[0])"
+    }
+
+    New-TeavelResult -Message "$($done.Count)명을 넣었습니다." -Details $d
+}
+
+<#
+.SYNOPSIS
     그룹·팀의 이름을 바꾼다. 내용은 그대로 남는다.
 .DESCRIPTION
     지우고 다시 만들면 파일·대화·팀이 전부 날아간다. 이름만 바꾸면 그대로 둔 채
@@ -859,4 +945,5 @@ Export-ModuleMember -Function `
     Get-TeavelM365Inventory, Get-TeavelTenantUser, `
     Get-TeavelUserName, Set-TeavelDisplayName, `
     New-TeavelM365Group, Sync-TeavelTeamChannel, `
+    Get-TeavelTeamMember, Add-TeavelTeamMember, `
     Rename-TeavelM365Group, Remove-TeavelM365Group

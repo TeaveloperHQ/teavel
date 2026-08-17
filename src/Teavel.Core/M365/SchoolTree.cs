@@ -25,6 +25,12 @@ public enum GroupKind
 /// <param name="Description">설명.</param>
 /// <param name="Template">team 일 때 standard · educationClass · educationStaff.</param>
 /// <param name="Visibility">private · public.</param>
+/// <param name="Values">
+/// 이 항목이 펼쳐질 때 쓴 값들 — <c>{학년:"1", 반:"3"}</c>.
+/// <b>명단의 학생을 어느 팀에 넣을지 정할 때 이것으로 잇는다.</b>
+/// 이름('1학년 3반')으로 짐작하면 학교마다 표기가 달라 어긋난다.
+/// generate 가 없으면 비어 있다.
+/// </param>
 /// <param name="Channels">
 /// 팀 안에 둘 채널 이름들. team 이 아니면 비어 있다.
 /// '일반'(General)은 팀을 만들면 저절로 생기므로 여기 적지 않는다.
@@ -37,7 +43,8 @@ public sealed record DeclaredGroup(
     string Description,
     string Template,
     string Visibility,
-    IReadOnlyList<string> Channels);
+    IReadOnlyList<string> Channels,
+    IReadOnlyDictionary<string, string> Values);
 
 /// <summary>선언을 읽다 만난 문제 하나.</summary>
 /// <param name="Where">어느 선언에서 났는지.</param>
@@ -248,7 +255,8 @@ public sealed class SchoolTree
                 Description: desc,
                 Template: string.IsNullOrWhiteSpace(d.Template) ? "standard" : d.Template!,
                 Visibility: string.IsNullOrWhiteSpace(d.Visibility) ? "private" : d.Visibility!,
-                Channels: channels));
+                Channels: channels,
+                Values: values));
         }
     }
 

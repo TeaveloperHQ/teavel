@@ -211,6 +211,22 @@ function Add-UnifiedGroupLinks { param($Identity, $LinkType, $Links, $ErrorActio
     ResourceProvisioningOptions 에 'Team' 이 붙는데, 그것을 흉내 내지 않으면
     두 번째 실행에서 "그룹은 있는데 팀이 안 붙었다" 로 잘못 갈린다.
 #>
+<#
+    사람을 넣으면 그룹의 구성원 수도 늘어야 한다.
+    진짜는 당연히 그런데, 흉내가 얕으면 새로 만든 팀이 계속 '구성원 1명뿐 → 정리 후보' 로
+    올라와 시험이 거짓말을 한다. 실제로 그렇게 한 번 속았다.
+#>
+function Set-FakeMemberCount {
+    param($GroupId, $Count)
+    foreach ($row in $script:Store) {
+        if ((Get-FakeGroupId -Alias ([string]$row.Alias)) -eq $GroupId) {
+            $row.Members = $Count
+            Save-FakeStore
+            return
+        }
+    }
+}
+
 function Set-FakeTeamFlag {
     param($Alias)
     $row = $script:Store | Where-Object { $_.Alias -eq $Alias } | Select-Object -First 1
@@ -219,4 +235,4 @@ function Set-FakeTeamFlag {
 
 Export-ModuleMember -Function Connect-ExchangeOnline, Disconnect-ExchangeOnline,
     Get-UnifiedGroup, New-UnifiedGroup, Set-UnifiedGroup, Remove-UnifiedGroup,
-    Add-UnifiedGroupLinks, Set-FakeTeamFlag, Get-FakeGroupId, Get-User, Set-User
+    Add-UnifiedGroupLinks, Set-FakeTeamFlag, Set-FakeMemberCount, Get-FakeGroupId, Get-User, Set-User

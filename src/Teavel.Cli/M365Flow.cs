@@ -1,4 +1,5 @@
 ﻿using Teavel.M365;
+using Teavel.Roster;
 using Teavel.Tools;
 
 namespace Teavel.Cli;
@@ -70,10 +71,16 @@ public sealed class M365Flow
 
         // ① 정리가 먼저. 여기서 이름을 바꾼 것은 아래 대조에 곧바로 반영돼야 하므로
         //    바뀐 목록을 돌려받는다.
-        inventory = await TidyAsync(host, inventory, ct).ConfigureAwait(false);
+        inventory = await TidyAsync(host, inventory, tree, ct).ConfigureAwait(false);
 
         // ② 그다음에 만들기.
-        return await CreateMissingAsync(host, tree, inventory, ct).ConfigureAwait(false);
+        var code = await CreateMissingAsync(host, tree, inventory, ct).ConfigureAwait(false);
+
+        // ③ 마지막으로 사람 넣기. 팀이 있어야 넣을 수 있으므로 순서가 여기다.
+        //    만들기가 일부 실패했어도 만들어진 팀에는 넣을 수 있으니 멈추지 않는다.
+        await AddMembersAsync(host, tree, ct).ConfigureAwait(false);
+
+        return code;
     }
 
     // ───────────────────────────── 준비 ─────────────────────────────
@@ -157,9 +164,14 @@ public sealed class M365Flow
 
     // ───────────────────────────── 재고 ─────────────────────────────
 
-    private async Task<List<ExistingGroup>?> ReadInventoryAsync(M365Host host, CancellationToken ct)
+    /// <param name="quiet">
+    /// 제목을 찍지 않는다. 학생을 넣기 전에 재고를 다시 읽을 때 쓴다 —
+    /// 거기서 '③ 지금 학교에 있는 것' 이 또 나오면 화면이 뒤로 돌아간 것처럼 보인다.
+    /// </param>
+    private async Task<List<ExistingGroup>?> ReadInventoryAsync(
+        M365Host host, CancellationToken ct, bool quiet = false)
     {
-        Ui.Title("③ 지금 학교에 있는 것");
+        if (!quiet) Ui.Title("③ 지금 학교에 있는 것");
 
         var res = await host.CallAsync("Get-TeavelM365Inventory",
             timeout: TimeSpan.FromMinutes(5), ct: ct).ConfigureAwait(false);
@@ -467,12 +479,28 @@ public sealed class M365Flow
 
     // ──────────────────────────── 정리 ────────────────────────────
 
-    /// <summary>정리 후보를 하나씩 보여 주고 어떻게 할지 묻는다. 바뀐 재고를 돌려준다.</summary>
+    /// <summary>
+    /// 정리 후보를 하나씩 보여 주고 어떻게 할지 묻는다. 바뀐 재고를 돌려준다.
+    /// </summary>
+    /// <remarks>
+    /// <b>선언에 있는 것은 후보에서 뺀다.</b> 방금 만든 반 팀은 학생을 넣기 전이라
+    /// 구성원이 없는데, 그것을 '쓰이지 않는 것 같다' 며 지우자고 권하면 안 된다.
+    /// 실제로 시험에서 팀 18개를 만든 직후 다시 돌리니 그중 13개를 지우자고 했다 —
+    /// 관리자가 그대로 눌렀으면 방금 만든 것을 도로 지울 뻔했다.
+    ///
+    /// 선언에 있다는 것은 '이 학교에 있어야 하는 것' 이라는 뜻이므로, 비어 있어도 정상이다.
+    /// </remarks>
     private async Task<List<ExistingGroup>> TidyAsync(
-        M365Host host, List<ExistingGroup> inventory, CancellationToken ct)
+        M365Host host, List<ExistingGroup> inventory, SchoolTree tree, CancellationToken ct)
     {
+        var declared = tree.Groups
+            .Select(g => TreeReconciler.Loosen(g.DisplayName))
+            .Where(n => n.Length > 0)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         var candidates = InventoryTriage.Triage(inventory)
             .Where(t => t.Bucket == TriageBucket.Candidate)
+            .Where(t => !declared.Contains(TreeReconciler.Loosen(t.Group.DisplayName)))
             .ToList();
 
         if (candidates.Count == 0) return inventory;
@@ -509,6 +537,17 @@ public sealed class M365Flow
             {
                 var newName = (Ui.Ask("        새 이름: ") ?? "").Trim();
                 if (newName.Length == 0) { Ui.Info("이름을 받지 못해 그냥 둡니다."); continue; }
+
+                // 엉뚱한 것이 들어오면 여기서 막는다. 창에 파일을 끌어다 놓거나 다른 곳에서
+                // 복사한 것을 그대로 붙여넣는 일이 있는데, 그대로 두면 학교 그룹 이름이
+                // 파일 경로가 되어 버린다. 실제로 시험 중에 그렇게 됐다.
+                if (newName.Length > 60 || newName.IndexOfAny(new[] { '\\', '/' }) >= 0)
+                {
+                    Ui.Warn("그건 이름 같지 않습니다. 파일 경로를 붙여넣으신 것 같습니다.");
+                    Ui.Dim($"      받은 것: {(newName.Length > 40 ? newName[..40] + "…" : newName)}");
+                    Ui.Info("그냥 둡니다. 다시 실행해서 이름만 적어 주세요.");
+                    continue;
+                }
 
                 var r = await host.CallAsync("Rename-TeavelM365Group", new Dictionary<string, object?>
                 {
@@ -772,6 +811,183 @@ public sealed class M365Flow
         """);
         Console.WriteLine();
         Ui.Dim("      Teams 와 아웃룩에 반영되기까지 몇 분 걸릴 수 있습니다.");
+    }
+
+    // ──────────────────────────── 구성원 ────────────────────────────
+
+    /// <summary>
+    /// 명단을 받아 학생들을 반 팀에 넣는다. <b>명단과 테넌트가 만나는 자리다.</b>
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 여기까지 둘은 따로 놀았다 — 명단은 파일만 읽고 끝났고 M365 는 테넌트만 봤다.
+    /// 그런데 관리자가 실제로 하고 싶은 일은 <b>이 반 학생들을 저 팀에 넣는 것</b> 하나다.
+    /// </para>
+    /// <para>
+    /// 그래서 별도 명령으로 두지 않고 이 흐름 안에 넣었다. 관리자는
+    /// <c>teavel m365</c> 하나만 알면 끝까지 간다 — 명단 명령이 따로 있다는 것을
+    /// 알아내야 한다면 그 자리에서 막힌다.
+    /// </para>
+    /// </remarks>
+    private async Task AddMembersAsync(M365Host host, SchoolTree tree, CancellationToken ct)
+    {
+        Ui.Title("⑥ 학생 넣기");
+
+        if (_assumeYes)
+        {
+            Ui.Info("자동 모드에서는 건너뜁니다. 명단 파일은 사람이 골라야 합니다.");
+            return;
+        }
+
+        Ui.Plain("""
+              반에 학생을 넣으려면 명단이 필요합니다.
+              엑셀·한셀·한글·csv 어느 것이든 됩니다. 양식은 맞추지 않으셔도 됩니다.
+
+                [1] 명단 파일이 있습니다
+                [2] 나중에 하겠습니다
+        """);
+
+        var pick = (Ui.Ask("      고르세요 [1] ") ?? "1").Trim();
+        if (pick.Length == 0) pick = "1";
+        if (pick != "1") { Ui.Info("팀만 만들어 두었습니다. 명단이 준비되면 다시 실행해 주세요."); return; }
+
+        Ui.Dim("      파일을 이 창에 끌어다 놓으시면 경로가 적힙니다.");
+        var path = (Ui.Ask("      명단 파일: ") ?? "").Trim().Trim('"');
+
+        if (path.Length == 0 || !File.Exists(path))
+        {
+            Ui.Warn(path.Length == 0 ? "파일을 받지 못했습니다." : $"그 자리에 파일이 없습니다: {path}");
+            Ui.Dim("      팀은 이미 만들어졌습니다. 명단이 준비되면 다시 실행해 주세요.");
+            return;
+        }
+
+        var roster = ReadRoster(path);
+        if (roster is null) return;
+
+        // 대조를 다시 한다 — 방금 만든 팀이 재고에 반영돼 있어야 하기 때문이다.
+        var fresh = await ReadInventoryAsync(host, ct, quiet: true).ConfigureAwait(false);
+        if (fresh is null) return;
+
+        var plan = TreeReconciler.Plan(tree.Groups, fresh);
+
+        // 이미 들어 있는 사람을 알아야 여러 번 돌려도 안전하다.
+        var teams = plan.Where(p => p.Existing is { IsTeam: true, GroupId.Length: > 0 })
+                        .Select(p => p.Existing!.GroupId).Distinct().ToList();
+
+        var have = new Dictionary<string, IReadOnlyList<TeamMember>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var id in teams)
+        {
+            var r = await host.CallAsync("Get-TeavelTeamMember",
+                new Dictionary<string, object?> { ["GroupId"] = id },
+                timeout: TimeSpan.FromMinutes(2), ct: ct).ConfigureAwait(false);
+            have[id] = r.Ok ? ParseMembers(r.Details) : Array.Empty<TeamMember>();
+        }
+
+        var assignments = MemberPlanner.Plan(roster.Rows, plan, have);
+
+        Console.WriteLine();
+        Ui.Info(MemberPlanner.Summarize(assignments));
+        Console.WriteLine();
+
+        foreach (var a in assignments)
+        {
+            if (a.Problem.Length > 0) { Ui.Warn($"{a.ClassKey} — {a.Problem}"); continue; }
+
+            var already = a.Already > 0 ? $"  (이미 {a.Already}명 들어 있음)" : "";
+            if (a.ToAdd.Count == 0) Ui.Dim($"      {a.ClassKey}  →  넣을 사람 없음{already}");
+            else Ui.Plain($"        {a.ClassKey}  →  {a.Team!.DisplayName}   {a.ToAdd.Count}명{already}");
+        }
+
+        var total = assignments.Sum(a => a.ToAdd.Count);
+        if (total == 0)
+        {
+            Console.WriteLine();
+            Ui.Ok("넣을 사람이 없습니다. 이미 다 들어 있습니다.");
+            return;
+        }
+
+        Console.WriteLine();
+        if (!Ui.Confirm($"      {total}명을 넣을까요?")) { Ui.Info("넣지 않았습니다."); return; }
+
+        var added = 0;
+        var failed = 0;
+
+        foreach (var a in assignments.Where(x => x.CanApply))
+        {
+            var r = await host.CallAsync("Add-TeavelTeamMember", new Dictionary<string, object?>
+            {
+                ["GroupId"] = a.Team!.GroupId,
+                ["Users"] = a.ToAdd.Select(x => x.Upn).ToList(),
+                ["Role"] = "Member",
+            }, timeout: TimeSpan.FromMinutes(10), ct: ct).ConfigureAwait(false);
+
+            if (r.Ok)
+            {
+                Ui.Ok($"{a.ClassKey} — {r.Message}");
+                added += a.ToAdd.Count - r.Details.Count(d => d.StartsWith("실패:", StringComparison.Ordinal));
+            }
+            else
+            {
+                Ui.Error($"{a.ClassKey} — {r.Message}");
+                failed++;
+            }
+
+            foreach (var d in r.Details.Where(d => d.StartsWith("실패:", StringComparison.Ordinal)).Take(3))
+                Ui.Dim($"      {d}");
+        }
+
+        Console.WriteLine();
+        Ui.Info($"{added}명을 넣었습니다.");
+        if (failed > 0) Ui.Warn($"{failed}개 반은 넣지 못했습니다. 다시 실행하면 못 넣은 사람만 다시 시도합니다.");
+        Ui.Dim("      학생 화면에 보이기까지 몇 분 걸릴 수 있습니다.");
+    }
+
+    /// <summary>명단 파일을 읽어 준다. 읽지 못하면 까닭을 말하고 null.</summary>
+    private static RosterResult? ReadRoster(string path)
+    {
+        if (!TableReader.CanReadDirectly(path))
+        {
+            Ui.Warn($"'{Path.GetExtension(path)}' 파일은 아직 그대로 읽지 못합니다.");
+            Ui.Dim("      엑셀·한셀은 [다른 이름으로 저장] 에서 CSV 나 xlsx 로,");
+            Ui.Dim("      한글은 HWPX 로 한 번 저장해 주시면 읽습니다.");
+            return null;
+        }
+
+        Table table;
+        try { table = TableReader.Read(path); }
+        catch (Exception ex) { Ui.Error($"파일을 읽지 못했습니다: {ex.Message}"); return null; }
+
+        var map = RosterMapper.Map(table.Rows);
+        var guess = RosterExtractor.DetectIdFormat(table, map);
+        var result = RosterExtractor.Extract(table, map, guess.Certain ? guess.Format : null);
+
+        Console.WriteLine();
+        Ui.Ok($"{table.Source} — 명단 {result.Rows.Count}줄");
+        Ui.Details(RosterMapper.Explain(map));
+
+        var bad = result.Bad.ToList();
+        if (bad.Count > 0)
+        {
+            Console.WriteLine();
+            Ui.Warn($"쓸 수 없는 줄이 {bad.Count}개 있습니다. 그 줄은 빼고 넣습니다.");
+            foreach (var b in bad.Take(5))
+                Ui.Plain($"        {b.Line}번째 줄 — {string.Join(" · ", b.Problems)}");
+        }
+
+        return result;
+    }
+
+    /// <summary>PowerShell 이 낸 구성원 줄들을 읽는다.</summary>
+    internal static List<TeamMember> ParseMembers(IEnumerable<string> lines)
+    {
+        var members = new List<TeamMember>();
+        foreach (var line in lines)
+        {
+            var f = line.Split('\t');
+            if (f.Length < 2 || !string.Equals(f[0], "MEMBER", StringComparison.Ordinal)) continue;
+            members.Add(new TeamMember(f[1].Trim(), f.Length > 2 ? f[2].Trim() : ""));
+        }
+        return members;
     }
 
     private static string KindName(GroupKind k) => k switch

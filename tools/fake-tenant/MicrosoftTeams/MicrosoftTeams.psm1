@@ -123,10 +123,42 @@ function Get-CsOnlineUser {
     $people.ToArray()
 }
 
-function Add-TeamUser { param($GroupId, $User, $Role, $ErrorAction) }
+# 구성원도 실행 사이에 남긴다 — 여러 번 돌려도 안전한지 보려면 필요하다.
+$script:MemberStore = if ($env:TEAVEL_FAKE_STORE) { "$env:TEAVEL_FAKE_STORE.members" } else { $null }
+$script:Members = @{}
+if ($script:MemberStore -and (Test-Path $script:MemberStore)) {
+    $loaded = Get-Content $script:MemberStore -Raw | ConvertFrom-Json
+    foreach ($p in $loaded.PSObject.Properties) { $script:Members[$p.Name] = @($p.Value) }
+}
+function Save-FakeMembers {
+    if ($script:MemberStore) { $script:Members | ConvertTo-Json -Depth 5 | Set-Content -Path $script:MemberStore }
+}
+
+function Get-TeamUser {
+    param($GroupId, $Role, $ErrorAction)
+    if (-not $script:Members.ContainsKey($GroupId)) { return @() }
+    @($script:Members[$GroupId] | ForEach-Object {
+        $bits = $_ -split '\|'
+        [pscustomobject]@{ User = $bits[0]; Role = $bits[1] }
+    })
+}
+
+function Add-TeamUser {
+    param($GroupId, $User, $Role)
+    if (-not $script:Members.ContainsKey($GroupId)) { $script:Members[$GroupId] = @() }
+    if ($script:Members[$GroupId] -match "^$([regex]::Escape($User))\|") {
+        throw "이미 들어 있습니다: $User"
+    }
+    $script:Members[$GroupId] += "$User|$(if($Role){$Role}else{'Member'})"
+    Save-FakeMembers
+
+    # 그룹의 구성원 수도 따라 늘어야 한다 — 진짜가 그렇다.
+    Import-Module ExchangeOnlineManagement
+    Set-FakeMemberCount -GroupId $GroupId -Count $script:Members[$GroupId].Count
+}
 function Get-Team { param($ErrorAction) @() }
 function Get-CsTenant { param($ErrorAction) [pscustomobject]@{ DisplayName = '가짜 학교' } }
 
 Export-ModuleMember -Function Connect-MicrosoftTeams, Disconnect-MicrosoftTeams,
-    New-Team, New-TeamChannel, Get-TeamChannel, Add-TeamUser, Get-Team, Get-CsTenant,
+    New-Team, New-TeamChannel, Get-TeamChannel, Add-TeamUser, Get-TeamUser, Get-Team, Get-CsTenant,
     Get-CsOnlineUser
