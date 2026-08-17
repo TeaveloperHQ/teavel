@@ -40,7 +40,7 @@ public static class TableReader
     public static bool CanReadDirectly(string path)
     {
         var ext = Path.GetExtension(path).ToLowerInvariant();
-        return ext is ".csv" or ".txt" or ".tsv" or ".xlsx" or ".xlsm";
+        return ext is ".csv" or ".txt" or ".tsv" or ".xlsx" or ".xlsm" or ".hwpx";
     }
 
     /// <summary>파일을 읽는다. 확장자를 보고 알아서 고른다.</summary>
@@ -50,6 +50,7 @@ public static class TableReader
         return ext switch
         {
             ".xlsx" or ".xlsm" => ReadXlsx(path, sheet),
+            ".hwpx" => ReadHwpx(path),
             _ => ReadDelimited(path),
         };
     }
@@ -169,6 +170,79 @@ public static class TableReader
 
         cells.Add(sb.ToString().Trim());
         return cells;
+    }
+
+    // ────────────────────────────── 한글 ──────────────────────────────
+
+    /// <summary>
+    /// 한글 문서(.hwpx)에서 표를 읽는다. <b>한글이 없어도 읽는다.</b>
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 선생님들이 명단을 한글 파일로 주는 일이 흔하다. 그런데 한글에는 두 가지 형식이 있다.
+    /// </para>
+    /// <list type="bullet">
+    /// <item><c>.hwpx</c> — xlsx 처럼 zip 안의 xml 이다. <b>그래서 여기서 읽는다.</b></item>
+    /// <item><c>.hwp</c> — 압축된 이진 덩어리라 규격을 구현해야 한다. 아직 못 읽는다.</item>
+    /// </list>
+    /// <para>
+    /// 문서 안에 표가 여럿이면 <b>칸이 가장 많은 표</b>를 명단으로 본다.
+    /// 머리글·안내표는 대개 작고, 명단은 사람 수만큼 길기 때문이다.
+    /// </para>
+    /// <para>
+    /// 이름공간 접두어는 판마다 달라서(hp·hs 등) 따지지 않는다 — 태그의 끝 이름만 본다.
+    /// </para>
+    /// </remarks>
+    public static Table ReadHwpx(string path)
+    {
+        using var zip = ZipFile.OpenRead(path);
+
+        var best = new List<IReadOnlyList<string>>();
+        var tables = 0;
+
+        // 본문은 Contents/section0.xml, section1.xml … 으로 나뉜다.
+        foreach (var entry in zip.Entries
+                     .Where(e => e.FullName.Contains("section", StringComparison.OrdinalIgnoreCase)
+                              && e.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
+                     .OrderBy(e => e.FullName, StringComparer.Ordinal))
+        {
+            XDocument doc;
+            try { using var st = entry.Open(); doc = XDocument.Load(st); }
+            catch (System.Xml.XmlException) { continue; }
+
+            foreach (var tbl in doc.Descendants().Where(e => e.Name.LocalName == "tbl"))
+            {
+                tables++;
+                var rows = new List<IReadOnlyList<string>>();
+
+                foreach (var tr in tbl.Elements().Where(e => e.Name.LocalName == "tr"))
+                {
+                    var cells = tr.Elements()
+                        .Where(e => e.Name.LocalName == "tc")
+                        .Select(TextOf)
+                        .ToList();
+                    if (cells.Count > 0) rows.Add(cells);
+                }
+
+                if (rows.Sum(r => r.Count) > best.Sum(r => r.Count)) best = rows;
+            }
+        }
+
+        if (best.Count == 0)
+            throw new InvalidDataException(
+                "이 한글 문서 안에서 표를 찾지 못했습니다. 명단이 표가 아니라 글로 적혀 있으면 읽을 수 없습니다.");
+
+        var note = tables > 1 ? $"한글 문서 직접 읽음 (표 {tables}개 중 가장 큰 것)" : "한글 문서 직접 읽음";
+        return new Table(best, Path.GetFileName(path), note, PositionsAreExact: true);
+    }
+
+    /// <summary>칸 하나의 글자. 한 칸 안에 문단·글자 조각이 여럿일 수 있어 모두 이어 붙인다.</summary>
+    private static string TextOf(XElement cell)
+    {
+        var parts = cell.Descendants()
+                        .Where(e => e.Name.LocalName == "t")
+                        .Select(e => e.Value);
+        return string.Join("", parts).Replace("\u000b", " ").Trim();
     }
 
     // ────────────────────────────── xlsx ──────────────────────────────

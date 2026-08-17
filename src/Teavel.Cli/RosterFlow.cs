@@ -73,7 +73,12 @@ public static class RosterFlow
 
         WarnRaggedRows(table, map);
 
-        var result = RosterExtractor.Extract(table, map);
+        // 학번 형식은 학교마다 다르다. 박아 두지 않고 자료에서 알아낸 뒤,
+        // 확신이 없으면 사람에게 확인받는다 — 잘못 가르면 아이가 없는 반에 배정된다.
+        var guess = RosterExtractor.DetectIdFormat(table, map);
+        var format = ConfirmIdFormat(guess, assumeYes);
+
+        var result = RosterExtractor.Extract(table, map, format);
         ShowRows(result);
 
         if (result.Rows.Count == 0)
@@ -86,6 +91,62 @@ public static class RosterFlow
     }
 
     /// <summary>
+    /// 알아낸 학번 형식을 보여 주고, 확신이 없으면 사람에게 확인받는다.
+    /// </summary>
+    /// <remarks>
+    /// 파일에 학번과 학년·반·번호가 함께 있으면 맞춰 보면 알 수 있어 묻지 않는다.
+    /// 학번만 있으면 자릿수로 후보를 좁히는 것까지만 되므로 반드시 묻는다 —
+    /// 네 자리 1301 은 1학년 3반 1번일 수도, 1학년 30반 1번일 수도 있다.
+    /// </remarks>
+    private static StudentIdFormat? ConfirmIdFormat(StudentIdGuess guess, bool assumeYes)
+    {
+        if (guess.Format is null)
+        {
+            if (guess.Why.Length > 0)
+            {
+                Console.WriteLine();
+                Ui.Dim($"      학번 형식: {guess.Why}");
+                Ui.Dim("      학번을 만들거나 가르지 않고, 파일에 있는 값만 씁니다.");
+            }
+            return null;
+        }
+
+        Console.WriteLine();
+        if (guess.Certain)
+        {
+            Ui.Ok($"학번 형식: {guess.Format}");
+            Ui.Dim($"      {guess.Why}");
+            return guess.Format;
+        }
+
+        Ui.Warn($"학번 형식을 하나로 정하지 못했습니다.");
+        Ui.Dim($"      {guess.Why}");
+        Console.WriteLine();
+
+        var options = new List<StudentIdFormat> { guess.Format };
+        options.AddRange(guess.Alternatives);
+
+        for (var i = 0; i < options.Count; i++)
+            Ui.Plain($"        [{i + 1}] {options[i].Example()}      ({options[i]})");
+        Ui.Plain($"        [0] 모르겠습니다 — 학번은 파일에 있는 것만 씁니다");
+
+        // 사람이 없는 자리에서는 짐작으로 넘어가지 않는다.
+        if (assumeYes)
+        {
+            Ui.Info("자동 모드에서는 학번을 만들거나 가르지 않습니다.");
+            return null;
+        }
+
+        while (true)
+        {
+            var pick = (Ui.Ask($"      고르세요 [1] ") ?? "1").Trim();
+            if (pick.Length == 0) pick = "1";
+            if (pick == "0") return null;
+            if (int.TryParse(pick, out var n) && n >= 1 && n <= options.Count) return options[n - 1];
+        }
+    }
+
+    /// <summary>
     /// 여기가 갈림길이다 — <b>계정을 한꺼번에 만들 것인가, 이미 있는 계정을 쓸 것인가.</b>
     /// </summary>
     /// <remarks>
@@ -95,9 +156,8 @@ public static class RosterFlow
     /// 없는 계정에 배정하려 들면 한 줄도 못 넣는다. 그래서 반드시 사람이 정해야 한다.
     /// </para>
     /// <para>
-    /// 계정 만들기는 Exchange·Teams 모듈로 못 한다. Graph 아니면 관리 센터인데
-    /// Graph 는 동의 화면을 부르므로, <b>관리 센터에 올릴 파일을 만들어 주는 쪽</b>을 골랐다.
-    /// 학생 개인 정보가 우리 코드를 거쳐 밖으로 나가지 않는다는 점도 크다.
+    /// 다만 <b>"벌크로 만들까요" 라고 물으면 안 된다.</b> 그 말을 아는 사람이면 우리가 필요 없다.
+    /// 자기 경험으로 답할 수 있는 것으로 바꿔 묻는다 — "학생들이 로그인해 본 적이 있습니까".
     /// </para>
     /// </remarks>
     private static int ChooseWhatToDo(RosterResult result, string sourcePath, bool assumeYes)
@@ -105,22 +165,25 @@ public static class RosterFlow
         var usable = result.Good.Where(r => r.Upn.Length > 0).ToList();
 
         Console.WriteLine();
-        Ui.Title("이 명단으로 무엇을 할까요");
-        Ui.Plain("""
-              [1] 계정을 한꺼번에 만들기
-                  아직 학생 계정이 없을 때. 관리 센터에 올릴 파일을 만들어 드립니다.
-
-              [2] 이미 있는 계정을 반에 넣기
-                  학생들이 이미 아이디를 받았을 때.
-
-              [3] 여기까지만 — 읽은 내용만 확인
-        """);
+        Ui.Title("다음에 할 일을 정하겠습니다");
 
         if (assumeYes)
         {
-            Ui.Info("자동 모드에서는 여기서 멈춥니다. 어느 쪽인지는 사람이 정해야 합니다.");
+            Ui.Info("자동 모드에서는 여기까지만 합니다. 이 선택은 사람이 해야 합니다.");
             return 0;
         }
+
+        // 전문 용어로 묻지 않는다. 이건 누구나 자기 학교를 떠올려 답할 수 있다.
+        Ui.Plain("""
+              한 가지만 여쭙겠습니다.
+
+              이 명단에 있는 학생들이 지금까지 학교 계정으로
+              Teams 나 아웃룩에 로그인해 본 적이 있습니까?
+
+                [1] 아니요 — 계정이 아직 없습니다        (계정부터 만들어야 합니다)
+                [2] 예 — 이미 쓰고 있습니다             (반에 넣기만 하면 됩니다)
+                [3] 잘 모르겠습니다                     (확인하는 방법을 알려 드립니다)
+        """);
 
         var pick = (Ui.Ask("      고르세요 [3] ") ?? "3").Trim();
         if (pick.Length == 0) pick = "3";
@@ -129,8 +192,44 @@ public static class RosterFlow
         {
             "1" => MakeBulkCsv(usable, sourcePath),
             "2" => ExplainAssign(usable),
-            _   => 0,
+            _   => ExplainHowToCheck(usable, sourcePath),
         };
+    }
+
+    /// <summary>
+    /// 모르겠다고 한 사람을 그냥 돌려보내지 않는다. 확인하는 방법을 알려 주고 다시 데려온다.
+    /// </summary>
+    private static int ExplainHowToCheck(IReadOnlyList<RosterRow> rows, string sourcePath)
+    {
+        Ui.Title("계정이 있는지 확인하는 법");
+
+        var sample = rows.FirstOrDefault();
+
+        Ui.Plain("""
+              가장 빠른 방법은 한 명만 찾아보는 것입니다.
+
+              ① 관리 센터(admin.microsoft.com)를 엽니다
+              ② 왼쪽에서 [사용자] → [활성 사용자]
+              ③ 오른쪽 위 검색 칸에 아래 아이디를 붙여 넣습니다
+        """);
+
+        if (sample is not null)
+        {
+            Console.WriteLine();
+            Ui.Plain($"                 {sample.Upn}");
+            Console.WriteLine();
+        }
+
+        Ui.Plain("""
+              나오면 — 계정이 이미 있습니다. 반에 넣기만 하면 됩니다.
+              안 나오면 — 계정이 없습니다. 한꺼번에 만들어야 합니다.
+
+              확인하신 뒤 같은 명령을 한 번 더 실행해 주세요.
+        """);
+
+        Console.WriteLine();
+        Ui.Dim($"      teavel 명단 \"{sourcePath}\"");
+        return 0;
     }
 
     private static int MakeBulkCsv(IReadOnlyList<RosterRow> rows, string sourcePath)
@@ -143,19 +242,35 @@ public static class RosterFlow
             return 1;
         }
 
-        // 열 이름은 짐작하지 않는다. 관리 센터 견본을 주시면 그것을 그대로 쓴다 —
-        // 문서가 '견본과 정확히 같아야 한다' 고 못 박고 있고, 틀리면 통째로 거부당한다.
+        // 열 이름은 짐작하지 않는다. 관리 센터 견본이 있으면 그것을 그대로 쓴다 —
+        // 문서가 '견본과 정확히 같아야 한다' 고 못 박고 있고, 틀리면 올릴 때 통째로 거부당한다.
+        //
+        // 그런데 '견본 파일 경로' 를 맨입으로 물으면 안 된다. 견본이 무엇인지 모르는 분이
+        // 대부분이고, 빈 칸 앞에서 그대로 멈춘다. 있는지부터 갈라 주고 없으면 우리가 정한다.
         Console.WriteLine();
-        Ui.Dim("      관리 센터에서 내려받은 견본 파일이 있으면 그 열 이름을 그대로 쓰겠습니다.");
-        Ui.Dim("      (관리 센터 → 사용자 → 활성 사용자 → 여러 사용자 추가 → 샘플 다운로드)");
-        Ui.Dim("      없으면 그냥 Enter — 문서에 적힌 이름으로 만듭니다.");
-        var template = (Ui.Ask("      견본 파일 경로: ") ?? "").Trim().Trim('"');
+        Ui.Plain("""
+              먼저 한 가지만 확인하겠습니다.
 
-        if (template.Length > 0 && !File.Exists(template))
+              관리 센터에서 '여러 사용자 추가' 를 눌러 보시면
+              [샘플 파일 다운로드] 가 있습니다. 그 파일을 이미 받아 두셨습니까?
+
+                [1] 아니요 / 모르겠습니다   (그대로 만들겠습니다 — 대개 이대로 됩니다)
+                [2] 예 — 파일이 있습니다    (그 파일의 열 이름을 그대로 쓰겠습니다)
+        """);
+
+        var template = "";
+        var has = (Ui.Ask("      고르세요 [1] ") ?? "1").Trim();
+        if (has == "2")
         {
-            Ui.Warn($"그런 파일이 없습니다: {template}");
-            Ui.Dim("      문서에 적힌 이름으로 만들겠습니다.");
-            template = "";
+            Ui.Dim("      그 파일을 이 창에 끌어다 놓으시면 경로가 적힙니다.");
+            template = (Ui.Ask("      파일: ") ?? "").Trim().Trim('"');
+
+            if (template.Length > 0 && !File.Exists(template))
+            {
+                Ui.Warn($"그 자리에 파일이 없습니다: {template}");
+                Ui.Dim("      그대로 만들겠습니다. 올릴 때 열 이름이 다르다고 하면 그때 다시 하시면 됩니다.");
+                template = "";
+            }
         }
 
         var (text, headers, note) = BulkUserCsv.Build(rows, template.Length > 0 ? template : null);
@@ -340,16 +455,32 @@ public static class RosterFlow
         Console.WriteLine();
 
         // 여기서 그냥 '안 됩니다' 로 끝내면 아무것도 모르는 분은 막힌다.
-        // 무엇을 어떻게 누르면 되는지까지 적는다.
-        Ui.Plain("""
-              쓰고 계신 프로그램에서 이렇게 하시면 됩니다.
+        // 어느 프로그램에서 무엇을 누르면 되는지까지 적는다.
+        if (ext == ".hwp")
+        {
+            Ui.Plain("""
+                  한글에서 한 번만 저장해 주시면 읽을 수 있습니다.
 
-              ① 그 파일을 엽니다
-              ② [파일] → [다른 이름으로 저장]
-              ③ 파일 형식에서 'CSV' 또는 'Excel 통합 문서(*.xlsx)' 를 고릅니다
-              ④ 저장한 뒤 그 파일을 다시 알려 주세요
+                  ① 그 파일을 한글에서 엽니다
+                  ② [파일] → [다른 이름으로 저장하기]
+                  ③ 파일 형식을 'HWPX 문서 (*.hwpx)' 로 고릅니다
+                  ④ 저장한 뒤 그 파일로 다시 실행해 주세요
 
-              한셀·엑셀 어느 쪽이든 같습니다.
-        """);
+                  명단이 표로 되어 있으면 그대로 읽습니다.
+            """);
+        }
+        else
+        {
+            Ui.Plain("""
+                  쓰고 계신 프로그램에서 한 번만 저장해 주시면 됩니다.
+
+                  ① 그 파일을 엽니다
+                  ② [파일] → [다른 이름으로 저장]
+                  ③ 파일 형식에서 'CSV' 또는 'Excel 통합 문서(*.xlsx)' 를 고릅니다
+                  ④ 저장한 뒤 그 파일로 다시 실행해 주세요
+
+                  한셀·엑셀 어느 쪽이든 같습니다.
+            """);
+        }
     }
 }
