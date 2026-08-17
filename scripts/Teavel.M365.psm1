@@ -173,8 +173,19 @@ function Get-TeavelM365Inventory {
         $members = ''
         try { if ($null -ne $g.GroupMemberCount) { $members = [string]$g.GroupMemberCount } } catch { }
 
+        # 날짜는 이미 DateTime 인 경우가 대부분이지만, 문자열로 오면 지역 형식이라
+        # [datetime] 캐스트가 실패할 수 있다. 실패해도 그 그룹을 통째로 버리지는 않는다.
         $created = ''
-        try { if ($g.WhenCreated) { $created = ([datetime]$g.WhenCreated).ToString('yyyy-MM-dd') } } catch { }
+        try {
+            if ($g.WhenCreated -is [datetime]) {
+                $created = $g.WhenCreated.ToString('yyyy-MM-dd')
+            } elseif ($g.WhenCreated) {
+                $parsed = [datetime]::MinValue
+                if ([datetime]::TryParse([string]$g.WhenCreated, [ref]$parsed)) {
+                    $created = $parsed.ToString('yyyy-MM-dd')
+                }
+            }
+        } catch { }
 
         $privacy = ''
         try { $privacy = [string]$g.AccessType } catch { }

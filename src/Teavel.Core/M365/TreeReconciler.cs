@@ -1,14 +1,21 @@
 namespace Teavel.M365;
 
 /// <summary>테넌트에 지금 있는 그룹 하나.</summary>
-/// <param name="DisplayName">화면에 보이는 이름.</param>
+/// <param name="DisplayName">
+/// 화면에 보이는 이름. <b>대조는 이것을 기준으로 한다</b> —
+/// 별칭은 한글 이름에서 뜻이 날아가거나 Teams 가 자동 생성해 믿을 수 없다.
+/// </param>
 /// <param name="MailNickname">별칭(Exchange 의 Alias).</param>
 /// <param name="IsTeam">Teams 팀이 붙어 있는지.</param>
+/// <param name="MemberCount">구성원 수. 모르면 -1.</param>
+/// <param name="Created">만든 날(yyyy-MM-dd). 모르면 빈 문자열.</param>
 /// <param name="Origin">어디서 왔는지 짐작할 단서. 비어 있을 수 있다 — 판단에 쓰지 않는다.</param>
 public sealed record ExistingGroup(
     string DisplayName,
     string MailNickname,
     bool IsTeam,
+    int MemberCount = -1,
+    string Created = "",
     string Origin = "");
 
 /// <summary>대조 결과 항목 하나가 어떻게 될지.</summary>
