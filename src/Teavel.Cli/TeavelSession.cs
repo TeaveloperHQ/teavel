@@ -554,7 +554,9 @@ public sealed class TeavelSession : IAsyncDisposable
 
         OfferRegistrationOnce();
         if (_llm is null) Ui.Dim("  (언어 모델이 없어 낱말로 알아듣습니다. 'teavel 모델' 로 받으세요)");
-        Ui.Dim("  학교 전체의 팀·그룹을 구성하시려면 그냥 그렇게 적어 주세요. 예: 반 팀 만들어줘");
+        // 첫 화면에 명령을 늘어놓지 않는다 — 넷을 적으나 열을 적으나 못 읽는 것은 같다.
+        // 대신 '모를 때 어디로 가면 되는지' 한 곳만 또렷하게 둔다.
+        Ui.Dim("  하고 싶은 일을 그냥 적으셔도 됩니다.  예: 엑셀 다 합쳐줘 · 반 팀 만들어줘");
 
         await _mcp.ConnectAllAsync(ct).ConfigureAwait(false);
         if (_mcp.Connected.Count > 0)

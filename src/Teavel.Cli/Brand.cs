@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Teavel.Cli;
@@ -49,7 +49,7 @@ public static class Brand
         "선생님 컴퓨터를 대신 세팅해 드립니다",
         "",
         "처음이시면  점검  을 쳐 보세요.",
-        "목록 · 점검 · 고침 · 나가기",
+        "무엇을 칠 수 있는지 모르시면  도움말",
     };
 
     private static bool? _colorSupported;
