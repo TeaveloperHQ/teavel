@@ -249,15 +249,34 @@ function Install-TeavelM365Module {
                 continue
             }
 
-            # ③④ 를 피해 Install-Module 을 먼저 시도하고, 막히면 직접 받는다.
-            $ok = $false
+            # Install-Module -Scope CurrentUser 는 우리가 고른 폴더가 아니라
+            # PowerShell 이 정한 자리에 깐다. OneDrive 폴더 백업이 켜져 있으면 그 자리가
+            # OneDrive 아래이고, 거기 놓인 DLL 은 자리표시자가 되어 로드에 실패할 수 있다.
+            # 실기에서 MicrosoftTeams 가 OneDrive\문서 아래로 깔렸다(2026-08-17).
+            #
+            # 그래서 기본 자리가 OneDrive 아래면 Install-Module 을 쓰지 않고
+            # 우리가 고른 폴더로 직접 받는다.
+            $defaultsToOneDrive = $false
             try {
-                Install-Module -Name $spec.Name -Scope CurrentUser -Force -AllowClobber `
-                    -SkipPublisherCheck -ErrorAction Stop
-                $ok = $true
-                $done.Add("$($spec.Name) 설치 완료")
-            } catch {
-                $done.Add("$($spec.Name) — 갤러리에서 직접 받습니다")
+                $userScope = @($env:PSModulePath -split [IO.Path]::PathSeparator |
+                               Where-Object { $_ -like "*\Users\$env:USERNAME\*" } | Select-Object -First 1)
+                $defaultsToOneDrive = ($userScope -and $userScope[0] -match '\\OneDrive\\')
+            } catch { }
+
+            $ok = $false
+            if ($defaultsToOneDrive) {
+                $done.Add("$($spec.Name) — 기본 설치 자리가 OneDrive 아래라 다른 곳에 받습니다")
+            }
+            else {
+                # ③④ 를 피해 Install-Module 을 먼저 시도하고, 막히면 직접 받는다.
+                try {
+                    Install-Module -Name $spec.Name -Scope CurrentUser -Force -AllowClobber `
+                        -SkipPublisherCheck -ErrorAction Stop
+                    $ok = $true
+                    $done.Add("$($spec.Name) 설치 완료")
+                } catch {
+                    $done.Add("$($spec.Name) — 갤러리에서 직접 받습니다")
+                }
             }
 
             if (-not $ok) {
@@ -344,8 +363,11 @@ function Connect-TeavelM365 {
         Write-Host ''
 
         try {
-            if ($Account) { Connect-ExchangeOnline -UserPrincipalName $Account -ShowBanner:$false -ErrorAction Stop }
-            else          { Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop }
+            # 환경 변수로도 끄지만, 매개변수를 받는 판이면 그쪽이 확실하다.
+            $p = @{ ShowBanner = $false }
+            if ($Account) { $p['UserPrincipalName'] = $Account }
+            if ((Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('DisableWAM')) { $p['DisableWAM'] = $true }
+            Connect-ExchangeOnline @p -ErrorAction Stop
         } catch {
             throw ("로그인하지 못했습니다: " + $_.Exception.Message + "`n" +
                    "창을 닫으셨거나, 학교 계정이 아니거나, 전역 관리자가 아닐 수 있습니다.")
@@ -362,8 +384,10 @@ function Connect-TeavelM365 {
             Write-Host ''
             Write-Host '  팀 작업을 위해 한 번 더 로그인 창이 열립니다. 같은 계정으로 하시면 됩니다.'
             Write-Host ''
-            if ($Account) { Connect-MicrosoftTeams -AccountId $Account -ErrorAction Stop | Out-Null }
-            else          { Connect-MicrosoftTeams -ErrorAction Stop | Out-Null }
+            $p = @{}
+            if ($Account) { $p['AccountId'] = $Account }
+            if ((Get-Command Connect-MicrosoftTeams).Parameters.ContainsKey('DisableWAM')) { $p['DisableWAM'] = $true }
+            Connect-MicrosoftTeams @p -ErrorAction Stop | Out-Null
         }
     }
 

@@ -38,6 +38,26 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+<#
+    WAM(Windows 계정 관리자)을 쓰지 않는다.
+
+    최근 판의 로그인은 WAM 을 거치는데, WAM 은 로그인 창을 띄울 '부모 창' 을 요구한다.
+    이 프로세스는 창 없이 도는 상주 세션이라 부모 창이 없고, 그래서 이렇게 끝난다.
+
+        A window handle must be configured.
+        https://aka.ms/msal-net-wam#parent-window-handles
+
+    실기에서 그랬다(2026-08-17). 같은 명령을 선생님이 직접 연 PowerShell 창에서
+    돌리면 성공한다 — 거기엔 창이 있기 때문이다. 우리가 창을 만들 수도 있지만,
+    그러면 까만 창이 하나 더 떠서 선생님이 어느 창을 봐야 할지 헷갈린다.
+
+    WAM 을 끄면 예전 방식(브라우저 창)으로 돌아간다. 우리가 화면에 안내하는 것이
+    바로 그 브라우저 창이므로 안내와도 맞는다.
+
+    이 값은 이 프로세스에만 걸린다. 교사 PC 의 설정을 바꾸지 않는다.
+#>
+$env:MSAL_DISABLE_WAM = '1'
+
 # 한글이 깨지지 않도록 입출력을 UTF-8(BOM 없음)로 고정한다.
 try {
     [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
