@@ -128,6 +128,26 @@ public sealed class WindowsFacts
         catch { return false; }
     }
 
+    /// <summary>
+    /// 예전 판 Teams(사용자 폴더에 설치되던 것)가 있는지.
+    /// </summary>
+    /// <remarks>
+    /// 새 Teams 는 MSIX 라 <see cref="HasStoreApp"/>("MSTeams") 로 본다.
+    /// 둘 다 아니면 없는 것이다 — '프로그램 추가/제거' 는 보지 않는다(회의 추가 기능이 잡힌다).
+    /// </remarks>
+    public bool HasClassicTeams
+    {
+        get
+        {
+            try
+            {
+                return File.Exists(Path.Combine(
+                    _paths.LocalAppData, "Microsoft", "Teams", "current", "Teams.exe"));
+            }
+            catch { return false; }
+        }
+    }
+
     /// <summary>Excel/Word/Outlook 이 COM 으로 열리는지(설치 여부의 실질적 근거).</summary>
     public bool HasComProgId(string progId)
         => _reg.KeyExists(RegistryRoot.LocalMachine, $@"SOFTWARE\Classes\{progId}\CLSID")

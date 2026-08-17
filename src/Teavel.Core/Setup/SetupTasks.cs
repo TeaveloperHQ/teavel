@@ -112,6 +112,9 @@ public abstract class WingetInstallTask : ISetupTask
     /// <summary>winget 패키지 id.</summary>
     protected abstract string PackageId { get; }
 
+    /// <summary>스토어에서 찾을 이름. winget 이 없을 때 스토어를 대신 열어 준다.</summary>
+    protected virtual string StoreSearch => Title;
+
     public abstract Task<CheckResult> CheckAsync(CancellationToken ct = default);
 
     public virtual async Task<FixResult> FixAsync(CancellationToken ct = default)
@@ -121,10 +124,25 @@ public abstract class WingetInstallTask : ISetupTask
         if (check.State == CheckState.NotApplicable) return FixResult.NotSupported(check.Summary);
 
         if (!Proc.Exists("winget"))
-            return FixResult.Failed(
-                "winget(앱 설치 도구)이 없어 자동으로 설치할 수 없습니다.",
-                "Microsoft Store 에서 '앱 설치 관리자'를 설치하면 winget 이 생깁니다.",
-                "또는 학교 전산 담당 선생님께 설치를 요청하세요.");
+        {
+            // "Store 에서 앱 설치 관리자를 먼저 설치하세요" 는 같은 벽을 한 번 더 세우는 것이다.
+            // 어차피 Store 를 열어야 한다면 우리가 열고 찾아 주는 편이 낫다 —
+            // 선생님은 [설치] 만 누르면 된다.
+            var opened = Proc.Launch($"ms-windows-store://search?query={Uri.EscapeDataString(StoreSearch)}");
+
+            return opened
+                ? FixResult.Manual(
+                    $"Microsoft Store 를 열었습니다. 거기서 {Title} 를 설치해 주세요.",
+                    $"① 목록에서 '{StoreSearch}' 를 찾아 누릅니다",
+                    "② [설치] 또는 [받기] 를 누릅니다",
+                    "③ 다 될 때까지 기다립니다 (몇 분 걸립니다)",
+                    "",
+                    "마친 뒤 '점검' 을 다시 실행하면 확인됩니다.")
+                : FixResult.Failed(
+                    "자동으로 설치할 수 없고 Microsoft Store 도 열지 못했습니다.",
+                    "학교 전산 담당 선생님께 설치를 요청해 주세요.",
+                    $"요청하실 것: {Title}");
+        }
 
         var res = await Proc.RunAsync("winget", new[]
         {
@@ -416,15 +434,37 @@ public sealed class TeamsInstalledTask : WingetInstallTask
     public override string Title => "Teams 설치";
     public override string Why => "학교 공지·화상 수업·협업 파일이 Teams 로 오는 경우가 많습니다.";
     protected override string PackageId => "Microsoft.Teams";
+    protected override string StoreSearch => "Microsoft Teams";
 
+    /// <remarks>
+    /// '프로그램 추가/제거' 를 뒤지면 안 된다. 거기 잡히는 것은
+    /// <c>Microsoft Teams Meeting Add-in for Microsoft Office</c> — Outlook 추가 기능이지
+    /// Teams 가 아니다. Office 만 깔린 PC 에서도 그게 잡혀서, Teams 가 없는데
+    /// 있다고 보고하게 된다. 실기에서 실제로 그랬다(2026-08-17).
+    ///
+    /// 새 Teams 는 MSIX 앱(<c>MSTeams</c>)이고, 옛 Teams 는 사용자 폴더의 exe 다.
+    /// 그 둘만 본다.
+    /// </remarks>
     public override Task<CheckResult> CheckAsync(CancellationToken ct = default)
     {
         if (!OperatingSystem.IsWindows())
             return Task.FromResult(CheckResult.NotApplicable("Windows 에서만 확인할 수 있습니다."));
 
-        var found = _facts.FindInstalledPrograms("Teams");
-        return Task.FromResult(found.Count > 0
-            ? CheckResult.Ok("Teams 가 설치돼 있습니다.", found.ToArray())
+        if (_facts.HasStoreApp("MSTeams"))
+            return Task.FromResult(CheckResult.Ok("Teams 가 설치돼 있습니다."));
+
+        if (_facts.HasClassicTeams)
+            return Task.FromResult(CheckResult.Ok(
+                "Teams 가 설치돼 있습니다.",
+                "예전 판입니다. 새 Teams 로 바꾸시면 더 빠릅니다."));
+
+        // 추가 기능만 있는 경우를 짚어 준다 — 있는 줄 알기 쉬운 자리다.
+        var addin = _facts.FindInstalledPrograms("Teams Meeting Add-in");
+        return Task.FromResult(addin.Count > 0
+            ? CheckResult.NeedsFix(
+                "Teams 가 설치돼 있지 않습니다.",
+                "아웃룩의 'Teams 회의' 단추는 있지만 Teams 앱 자체는 없습니다.",
+                "그 단추만으로는 회의에 들어갈 수 없습니다.")
             : CheckResult.NeedsFix("Teams 가 설치돼 있지 않습니다."));
     }
 }
