@@ -46,6 +46,54 @@ try {
 
 $Marker = '##TEAVEL##'
 
+<#
+.SYNOPSIS
+    오류에서 <b>쓸 만한 말</b>을 뽑아낸다.
+.DESCRIPTION
+    .NET 예외는 겹겹이 싸여 있어서 겉껍데기만 보면 아무것도 알 수 없다.
+    실기에서 이렇게 나왔다:
+
+        ✗ 하나 이상의 오류가 발생했습니다.
+
+    이건 AggregateException 의 문구일 뿐이고 진짜 원인은 그 안에 있다.
+    전원도 안 꽂고 AS 를 부르는 분들에게 이런 말은 아무 쓸모가 없다 —
+    우리에게도 쓸모가 없다. 무엇이 잘못됐는지 알 수가 없기 때문이다.
+
+    그래서 안쪽까지 파고들어 가장 구체적인 말을 앞에 세우고, 거쳐 온 것들을 함께 남긴다.
+#>
+function Get-TeavelErrorLines {
+    param($ErrorRecord)
+
+    $seen = New-Object System.Collections.Generic.List[string]
+
+    function Add-One {
+        param($Text)
+        $t = ([string]$Text).Trim()
+        if ($t -and -not $seen.Contains($t)) { $seen.Add($t) }
+    }
+
+    $ex = $ErrorRecord.Exception
+    $depth = 0
+    while ($ex -and $depth -lt 8) {
+        Add-One $ex.Message
+
+        # AggregateException 은 InnerException 하나가 아니라 여럿을 들고 있다.
+        if ($ex -is [System.AggregateException]) {
+            foreach ($ie in $ex.InnerExceptions) {
+                $inner = $ie
+                $d2 = 0
+                while ($inner -and $d2 -lt 8) { Add-One $inner.Message; $inner = $inner.InnerException; $d2++ }
+            }
+        }
+
+        $ex = $ex.InnerException
+        $depth++
+    }
+
+    if ($seen.Count -eq 0) { Add-One $ErrorRecord.ToString() }
+    ,$seen.ToArray()
+}
+
 function Write-TeavelReply {
     param(
         [bool] $Ok,
@@ -129,10 +177,21 @@ while ($true) {
     catch {
         # 한 도구가 실패해도 세션은 살아 있어야 한다.
         # 여기서 죽으면 애써 해 둔 로그인이 함께 날아간다.
-        $detail = @()
+        # 겉껍데기가 아니라 안쪽의 구체적인 말을 앞에 세운다.
+        $lines = Get-TeavelErrorLines $_
+
+        # 여러 겹이면 가장 안쪽(마지막)이 진짜 원인인 경우가 많다.
+        # 다만 겉이 더 친절할 때도 있어, 뻔한 문구일 때만 안쪽으로 바꾼다.
+        $vague = @('하나 이상의 오류가 발생했습니다.', 'One or more errors occurred.')
+        $msg = $lines[0]
+        if ($lines.Count -gt 1 -and ($vague -contains $msg)) { $msg = $lines[-1] }
+
+        $detail = New-Object System.Collections.Generic.List[string]
+        foreach ($l in $lines) { if ($l -ne $msg) { $detail.Add($l) } }
         if ($_.InvocationInfo -and $_.InvocationInfo.ScriptLineNumber) {
-            $detail += "위치: $($_.InvocationInfo.ScriptName):$($_.InvocationInfo.ScriptLineNumber)"
+            $detail.Add("위치: $($_.InvocationInfo.ScriptName):$($_.InvocationInfo.ScriptLineNumber)")
         }
-        Write-TeavelReply -Ok $false -Message $_.Exception.Message -Details $detail
+
+        Write-TeavelReply -Ok $false -Message $msg -Details $detail.ToArray()
     }
 }
