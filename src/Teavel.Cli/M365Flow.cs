@@ -69,16 +69,23 @@ public sealed class M365Flow
         // 고치면 이미 여기저기에 뒤집힌 이름이 박혀 있다.
         await FixSplitNamesAsync(host, ct).ConfigureAwait(false);
 
-        // ① 정리가 먼저. 여기서 이름을 바꾼 것은 아래 대조에 곧바로 반영돼야 하므로
-        //    바뀐 목록을 돌려받는다.
-        inventory = await TidyAsync(host, inventory, tree, ct).ConfigureAwait(false);
+        // ① 명단을 먼저 받는다. 명단은 학생 목록이기도 하지만 무엇보다
+        //    이 학교가 몇 학년 몇 반까지 있는지를 담고 있다 — 구조의 출처다.
+        var roster = await AskRosterAsync(ct).ConfigureAwait(false);
 
-        // ② 그다음에 만들기.
-        var code = await CreateMissingAsync(host, tree, inventory, ct).ConfigureAwait(false);
+        // ② 명단이 있으면 그것으로 반 구조를 정한다. 없으면 선언 파일을 그대로 쓴다.
+        var groups = ShapeFromRoster(tree, roster);
 
-        // ③ 마지막으로 사람 넣기. 팀이 있어야 넣을 수 있으므로 순서가 여기다.
+        // ③ 정리. 여기서 이름을 바꾼 것은 아래 대조에 곧바로 반영돼야 하므로 목록을 돌려받는다.
+        inventory = await TidyAsync(host, inventory, groups, ct).ConfigureAwait(false);
+
+        // ④ 그다음에 만들기.
+        var code = await CreateMissingAsync(host, groups, inventory, ct).ConfigureAwait(false);
+
+        // ⑤ 마지막으로 사람 넣기. 팀이 있어야 넣을 수 있으므로 순서가 여기다.
         //    만들기가 일부 실패했어도 만들어진 팀에는 넣을 수 있으니 멈추지 않는다.
-        await AddMembersAsync(host, tree, ct).ConfigureAwait(false);
+        if (roster is not null)
+            await AddMembersAsync(host, groups, roster, ct).ConfigureAwait(false);
 
         return code;
     }
@@ -144,7 +151,8 @@ public sealed class M365Flow
         Ui.Title("② 학교 계정으로 로그인");
 
         // 팀을 만들 일이 없으면 Teams 로그인은 시키지 않는다 — 로그인 한 번도 벅찬 분들이다.
-        var needsTeams = tree.Groups.Any(g => g.Kind == GroupKind.Team);
+        // 명단으로 반을 만들 수도 있으므로 선언에 팀이 없어도 Teams 는 붙여 둔다.
+        var needsTeams = true;
 
         var args = new Dictionary<string, object?> { ["TeamsToo"] = needsTeams };
         var res = await host.CallAsync("Connect-TeavelM365", args,
@@ -491,9 +499,10 @@ public sealed class M365Flow
     /// 선언에 있다는 것은 '이 학교에 있어야 하는 것' 이라는 뜻이므로, 비어 있어도 정상이다.
     /// </remarks>
     private async Task<List<ExistingGroup>> TidyAsync(
-        M365Host host, List<ExistingGroup> inventory, SchoolTree tree, CancellationToken ct)
+        M365Host host, List<ExistingGroup> inventory,
+        IReadOnlyList<DeclaredGroup> groups, CancellationToken ct)
     {
-        var declared = tree.Groups
+        var declared = groups
             .Select(g => TreeReconciler.Loosen(g.DisplayName))
             .Where(n => n.Length > 0)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -606,11 +615,12 @@ public sealed class M365Flow
     // ──────────────────────────── 만들기 ────────────────────────────
 
     private async Task<int> CreateMissingAsync(
-        M365Host host, SchoolTree tree, IReadOnlyList<ExistingGroup> inventory, CancellationToken ct)
+        M365Host host, IReadOnlyList<DeclaredGroup> groups,
+        IReadOnlyList<ExistingGroup> inventory, CancellationToken ct)
     {
         Ui.Title("⑤ 모자란 것 만들기");
 
-        var plan = TreeReconciler.Plan(tree.Groups, inventory);
+        var plan = TreeReconciler.Plan(groups, inventory);
         Ui.Info(TreeReconciler.Summarize(plan));
 
         // 보안 그룹은 Graph 가 필요해 아직 못 만든다(고급). 만들 것에 섞어 두면
@@ -829,46 +839,16 @@ public sealed class M365Flow
     /// 알아내야 한다면 그 자리에서 막힌다.
     /// </para>
     /// </remarks>
-    private async Task AddMembersAsync(M365Host host, SchoolTree tree, CancellationToken ct)
+    private async Task AddMembersAsync(
+        M365Host host, IReadOnlyList<DeclaredGroup> groups, RosterResult roster, CancellationToken ct)
     {
         Ui.Title("⑥ 학생 넣기");
-
-        if (_assumeYes)
-        {
-            Ui.Info("자동 모드에서는 건너뜁니다. 명단 파일은 사람이 골라야 합니다.");
-            return;
-        }
-
-        Ui.Plain("""
-              반에 학생을 넣으려면 명단이 필요합니다.
-              엑셀·한셀·한글·csv 어느 것이든 됩니다. 양식은 맞추지 않으셔도 됩니다.
-
-                [1] 명단 파일이 있습니다
-                [2] 나중에 하겠습니다
-        """);
-
-        var pick = (Ui.Ask("      고르세요 [1] ") ?? "1").Trim();
-        if (pick.Length == 0) pick = "1";
-        if (pick != "1") { Ui.Info("팀만 만들어 두었습니다. 명단이 준비되면 다시 실행해 주세요."); return; }
-
-        Ui.Dim("      파일을 이 창에 끌어다 놓으시면 경로가 적힙니다.");
-        var path = (Ui.Ask("      명단 파일: ") ?? "").Trim().Trim('"');
-
-        if (path.Length == 0 || !File.Exists(path))
-        {
-            Ui.Warn(path.Length == 0 ? "파일을 받지 못했습니다." : $"그 자리에 파일이 없습니다: {path}");
-            Ui.Dim("      팀은 이미 만들어졌습니다. 명단이 준비되면 다시 실행해 주세요.");
-            return;
-        }
-
-        var roster = ReadRoster(path);
-        if (roster is null) return;
 
         // 대조를 다시 한다 — 방금 만든 팀이 재고에 반영돼 있어야 하기 때문이다.
         var fresh = await ReadInventoryAsync(host, ct, quiet: true).ConfigureAwait(false);
         if (fresh is null) return;
 
-        var plan = TreeReconciler.Plan(tree.Groups, fresh);
+        var plan = TreeReconciler.Plan(groups, fresh);
 
         // 이미 들어 있는 사람을 알아야 여러 번 돌려도 안전하다.
         var teams = plan.Where(p => p.Existing is { IsTeam: true, GroupId.Length: > 0 })
@@ -907,7 +887,7 @@ public sealed class M365Flow
         }
 
         Console.WriteLine();
-        if (!Ui.Confirm($"      {total}명을 넣을까요?")) { Ui.Info("넣지 않았습니다."); return; }
+        if (!_assumeYes && !Ui.Confirm($"      {total}명을 넣을까요?")) { Ui.Info("넣지 않았습니다."); return; }
 
         var added = 0;
         var failed = 0;
@@ -940,6 +920,108 @@ public sealed class M365Flow
         Ui.Info($"{added}명을 넣었습니다.");
         if (failed > 0) Ui.Warn($"{failed}개 반은 넣지 못했습니다. 다시 실행하면 못 넣은 사람만 다시 시도합니다.");
         Ui.Dim("      학생 화면에 보이기까지 몇 분 걸릴 수 있습니다.");
+    }
+
+    /// <summary>
+    /// 명단을 받는다. <b>학생 목록이면서 동시에 학교 구조의 출처다.</b>
+    /// </summary>
+    /// <remarks>
+    /// 처음에는 만들기 뒤에 두었는데 순서가 틀렸다. 명단에는 이 학교가 몇 학년 몇 반까지
+    /// 있는지가 들어 있고, 그것을 알아야 무엇을 만들지 정할 수 있다.
+    /// </remarks>
+    private async Task<RosterResult?> AskRosterAsync(CancellationToken ct)
+    {
+        await Task.CompletedTask.ConfigureAwait(false);
+
+        Ui.Title("④ 명단");
+
+        if (_assumeYes)
+        {
+            Ui.Info("자동 모드에서는 명단을 받지 않습니다. 파일은 사람이 골라야 합니다.");
+            return null;
+        }
+
+        Ui.Plain("""
+              학생 명단이 있으면 훨씬 많은 것을 대신 해 드릴 수 있습니다.
+              몇 학년 몇 반까지 있는지도 명단을 보면 알 수 있어, 따로 여쭙지 않아도 됩니다.
+
+              엑셀·한셀·한글·csv 어느 것이든 됩니다. 양식은 맞추지 않으셔도 됩니다.
+
+                [1] 명단 파일이 있습니다
+                [2] 없습니다 — 팀만 만들겠습니다
+        """);
+
+        var pick = (Ui.Ask("      고르세요 [1] ") ?? "1").Trim();
+        if (pick.Length == 0) pick = "1";
+        if (pick != "1")
+        {
+            Ui.Info("적어 두신 학교 구조대로 팀만 만들겠습니다.");
+            return null;
+        }
+
+        Ui.Dim("      파일을 이 창에 끌어다 놓으시면 경로가 적힙니다.");
+        var path = (Ui.Ask("      명단 파일: ") ?? "").Trim().Trim('"');
+
+        if (path.Length == 0 || !File.Exists(path))
+        {
+            Ui.Warn(path.Length == 0 ? "파일을 받지 못했습니다." : $"그 자리에 파일이 없습니다: {path}");
+            Ui.Dim("      명단 없이 이어 갑니다. 적어 두신 학교 구조대로 팀만 만듭니다.");
+            return null;
+        }
+
+        return ReadRoster(path);
+    }
+
+    /// <summary>
+    /// 명단에서 읽은 학교 모양으로 반 팀 선언을 만든다. 명단이 없으면 선언 파일을 그대로 쓴다.
+    /// </summary>
+    /// <remarks>
+    /// <c>catalog/m365-tree.json</c> 을 관리자가 고칠 리 없다 — 무엇을 적어야 하는지도 모르고,
+    /// 적으라고 하는 순간 그 자리에서 막힌다. 그런데 그럴 필요가 없다.
+    /// <b>명단에 이미 들어 있다.</b>
+    ///
+    /// 다만 짐작한 것은 반드시 보여 주고 승낙받는다 — 명단이 한 학년 것만 있을 수도 있고,
+    /// 그때 나머지 학년을 없는 것으로 치면 안 되기 때문이다.
+    /// </remarks>
+    private IReadOnlyList<DeclaredGroup> ShapeFromRoster(SchoolTree tree, RosterResult? roster)
+    {
+        if (roster is null) return tree.Groups;
+
+        var shape = SchoolShape.Read(roster.Rows);
+        if (shape.Classes.Count == 0)
+        {
+            Ui.Dim("      명단에서 학년·반을 읽어 내지 못해, 적어 두신 학교 구조를 씁니다.");
+            return tree.Groups;
+        }
+
+        var pattern = SchoolShape.FindClassPattern(tree);
+        var classes = SchoolShape.ToDeclarations(shape, pattern);
+
+        Console.WriteLine();
+        Ui.Ok($"명단을 보니 이 학교는 이렇습니다 — {shape.Describe()}");
+        Console.WriteLine();
+
+        foreach (var g in shape.Grades)
+        {
+            var row = shape.Classes.Where(c => c.Grade == g)
+                .Select(c => $"{c.ClassNo}반({shape.HeadCount[c]}명)");
+            Ui.Plain($"        {g}학년   {string.Join("  ", row)}");
+        }
+
+        Console.WriteLine();
+        Ui.Dim($"      이대로면 팀 {classes.Count}개를 만들게 됩니다. 이름은 이렇습니다:");
+        foreach (var c in classes.Take(3)) Ui.Plain($"        {c.DisplayName}   [{c.MailNickname}]");
+        if (classes.Count > 3) Ui.Dim($"        … 그 밖에 {classes.Count - 3}개");
+
+        Console.WriteLine();
+        if (!_assumeYes && !Ui.Confirm("      이 구조가 맞습니까?"))
+        {
+            Ui.Info("적어 두신 학교 구조를 그대로 쓰겠습니다.");
+            return tree.Groups;
+        }
+
+        // 반 팀만 갈아 끼운다. 교직원 그룹 같은 나머지 선언은 그대로 둔다.
+        return SchoolShape.WithoutClasses(tree, pattern).Concat(classes).ToList();
     }
 
     /// <summary>명단 파일을 읽어 준다. 읽지 못하면 까닭을 말하고 null.</summary>

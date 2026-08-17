@@ -451,6 +451,7 @@ public sealed class TeavelSession : IAsyncDisposable
 
         OfferRegistrationOnce();
         if (_llm is null) Ui.Dim("  (언어 모델이 없어 낱말로 알아듣습니다. 'teavel 모델' 로 받으세요)");
+        Ui.Dim("  학교 전체의 팀·그룹을 구성하시려면 그냥 그렇게 적어 주세요. 예: 반 팀 만들어줘");
 
         await _mcp.ConnectAllAsync(ct).ConfigureAwait(false);
         if (_mcp.Connected.Count > 0)
@@ -473,6 +474,10 @@ public sealed class TeavelSession : IAsyncDisposable
             if (line is "점검" or "check") { await RunCheckAsync(ct).ConfigureAwait(false); continue; }
             if (line is "고침" or "손보기" or "fix") { await RunFixAsync(null, ct).ConfigureAwait(false); continue; }
 
+            // 학교 전체를 만지는 일은 도구 하나로 되는 것이 아니라 한 판이 필요하다.
+            // 관리자가 'teavel m365' 라는 말을 알 리 없으므로, 하고 싶은 말로 찾아 준다.
+            if (LooksLikeSchoolWork(line)) { await RunM365Async(ct).ConfigureAwait(false); continue; }
+
             await HandleUtteranceAsync(line, ct).ConfigureAwait(false);
         }
         return 0;
@@ -490,6 +495,42 @@ public sealed class TeavelSession : IAsyncDisposable
         await _mcp.ConnectAllAsync(ct).ConfigureAwait(false);
         await HandleUtteranceAsync(utterance, ct).ConfigureAwait(false);
         return 0;
+    }
+
+    /// <summary>
+    /// 학교 전체 구성 이야기인지 알아본다.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 관리자는 <c>teavel m365</c> 라는 말을 모른다. 도움말을 봐야 알 수 있는데,
+    /// 그건 '무엇을 물어야 할지도 모르는 사람' 을 상대한다는 우리 원칙에 어긋난다.
+    /// </para>
+    /// <para>
+    /// 그래서 하고 싶은 말로 알아듣는다 — "반 팀 만들어줘" · "학생들 넣어야 해" ·
+    /// "teams 구성" 같은 것. 도구 하나로 되는 일이 아니라 한 판이 필요한 일이라
+    /// 보통 갈래(도구 고르기)로 보내지 않고 여기서 가른다.
+    /// </para>
+    /// </remarks>
+    internal static bool LooksLikeSchoolWork(string line)
+    {
+        var t = line.Replace(" ", "").ToLowerInvariant();
+
+        // '학교 전체' 를 가리키는 말과 '만들다/넣다' 가 함께 있어야 한다.
+        // '엑셀 합쳐줘' 같은 것이 여기로 새면 안 된다.
+        var about = new[]
+        {
+            "m365", "ms365", "office365", "오피스365", "팀즈", "teams",
+            "반팀", "학급팀", "수업팀", "학교그룹", "m365그룹", "그룹구성", "팀구성",
+            "학생명단", "반배정", "학급배정", "구성원배정",
+        };
+        if (about.Any(w => t.Contains(w, StringComparison.Ordinal))) return true;
+
+        // '팀'·'그룹'·'반' 은 다른 말에도 흔히 섞이므로 함께 오는 말을 본다.
+        var thing = new[] { "팀", "그룹", "반", "학급", "명단" };
+        var verb = new[] { "만들", "생성", "구성", "정리", "넣", "배정", "추가", "세팅" };
+
+        return thing.Any(w => t.Contains(w, StringComparison.Ordinal))
+            && verb.Any(w => t.Contains(w, StringComparison.Ordinal));
     }
 
     private async Task HandleUtteranceAsync(string utterance, CancellationToken ct)
