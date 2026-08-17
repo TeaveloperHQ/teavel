@@ -1,4 +1,4 @@
-using Teavel.Apps;
+﻿using Teavel.Apps;
 using Teavel.Intent;
 using Teavel.Mcp;
 using Teavel.Model;
@@ -177,6 +177,10 @@ public sealed class TeavelSession : IAsyncDisposable
     /// </remarks>
     public Task<int> RunM365Async(CancellationToken ct)
         => new M365Flow(_tools, AssumeYes).RunAsync(ct);
+
+    /// <summary>선생님을 이름으로 찾아 계정을 알려 준다.</summary>
+    public Task<int> RunFindTeacherAsync(string? name, CancellationToken ct)
+        => M365Flow.FindTeacherAsync(_tools, name, ct);
 
     // ─────────────────────────────── 언어 모델 ───────────────────────────────
 

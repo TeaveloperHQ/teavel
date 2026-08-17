@@ -105,8 +105,11 @@ function Get-CsOnlineUser {
         foreach ($room in 1..6) {
             foreach ($no in 1..10) {
                 $sid = '{0}{1:d2}{2:d2}' -f $grade, $room, $no
+                # 실제 학교의 학생 표시 이름은 학번+이름이다(10101홍길동).
+                $family = @('김','이','박','최','정','강','조','윤','장','임')[($no - 1) % 10]
+                $given  = @('민준','서연','도윤','하은','시우','지아','예준','수아','건우','채원')[($room - 1) % 10]
                 $people.Add((New-FakePerson -Upn "s$sid@school.example.kr" `
-                    -Name "학생$sid" -Dept '' -Kind 'User' -Plans $script:StudentPlan))
+                    -Name "$sid$family$given" -Dept '' -Kind 'User' -Plans $script:StudentPlan))
             }
         }
     }

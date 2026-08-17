@@ -282,6 +282,18 @@ public static class RosterFlow
         try { BulkUserCsv.Write(outPath, text); }
         catch (Exception ex) { Ui.Error($"파일을 쓰지 못했습니다: {ex.Message}"); return 2; }
 
+        // 손으로 한 명씩 만들 때는 15열짜리 파일이 필요 없다 — 이름과 계정만 있으면 된다.
+        // 몇 명 안 되거나 파일 올리기가 겁나는 분들이 이쪽을 쓴다.
+        var listPath = Path.ChangeExtension(outPath, null) + "-한명씩.txt";
+        try
+        {
+            var lines = new List<string> { "표시 이름\t로그인 아이디", new string('─', 50) };
+            lines.AddRange(rows.Select(r => $"{(r.DisplayName.Length > 0 ? r.DisplayName : r.Name)}\t{r.Upn}"));
+            File.WriteAllText(listPath, string.Join(Environment.NewLine, lines) + Environment.NewLine,
+                new System.Text.UTF8Encoding(true));
+        }
+        catch { listPath = ""; }
+
         Console.WriteLine();
         Ui.Ok($"{rows.Count}명 분을 만들었습니다.");
         Ui.Plain($"        {outPath}");
@@ -301,6 +313,20 @@ public static class RosterFlow
               비밀번호는 관리 센터가 만들어 줍니다. 그 목록을 꼭 내려받아 두세요 —
               그 화면을 닫으면 다시 볼 수 없습니다.
         """);
+
+        if (listPath.Length > 0)
+        {
+            Console.WriteLine();
+            Ui.Plain("""
+                  한 명씩 손으로 만드셔도 됩니다.
+
+                  계정을 만드는 데 꼭 필요한 것은 이름과 로그인 아이디 둘뿐입니다.
+                  관리 센터에서 [사용자 추가] 를 눌러 아래 목록을 보고 하나씩 넣으시면 됩니다.
+                  파일 올리기가 부담스럽거나 사람이 몇 명 안 될 때 이 편이 낫습니다.
+            """);
+            Console.WriteLine();
+            Ui.Plain($"        {listPath}");
+        }
 
         Console.WriteLine();
         Ui.Dim("      계정이 다 만들어진 뒤에 'teavel m365' 로 반에 넣으시면 됩니다.");

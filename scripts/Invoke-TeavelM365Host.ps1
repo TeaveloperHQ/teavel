@@ -97,6 +97,7 @@ while ($true) {
     $allowed = @(
         'Get-TeavelM365Readiness', 'Install-TeavelM365Module', 'Connect-TeavelM365',
         'Get-TeavelM365Inventory', 'Get-TeavelTenantUser',
+        'Get-TeavelUserName', 'Set-TeavelDisplayName',
         'New-TeavelM365Group', 'Sync-TeavelTeamChannel',
         'Rename-TeavelM365Group', 'Remove-TeavelM365Group'
     )

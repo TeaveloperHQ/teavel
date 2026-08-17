@@ -59,6 +59,7 @@ try
         "자가점검" or "selfcheck"     => await session.RunSelfCheckAsync(cancel.Token),
         "m365" or "그룹" or "teams"   => await session.RunM365Async(cancel.Token),
         "명단" or "roster"            => RosterFlow.Run(argument, assumeYes),
+        "선생님" or "교사" or "teacher" => await session.RunFindTeacherAsync(argument, cancel.Token),
         "도움말" or "help" or "--help" => Run(PrintHelp),
         _                             => await session.HandleOneShotAsync(string.Join(' ', positional), cancel.Token),
     };
@@ -87,6 +88,7 @@ static void PrintHelp()
       teavel m365           학교 그룹·Teams 를 살펴보고 정리하고 만듭니다
                             (학교 M365 전역 관리자 전용)
       teavel 명단 <파일>    명단 파일을 읽어 학년·반·번호·학번·이름·ID 로 정리합니다
+      teavel 선생님 <이름>  선생님 계정을 이름으로 찾습니다
 
       teavel 설치           어디서나 teavel 로 실행되게 등록합니다
       teavel 제거           그 등록을 풉니다(프로그램은 지우지 않습니다)

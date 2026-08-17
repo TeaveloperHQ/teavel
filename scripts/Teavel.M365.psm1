@@ -576,6 +576,71 @@ function Get-TeavelTenantUser {
 
 <#
 .SYNOPSIS
+    사람들의 성·이름·표시이름을 읽는다. 고치지는 않는다.
+.DESCRIPTION
+    교육청 포털로 교사 계정을 만들면 성(LastName)과 이름(FirstName)이 나뉘어 들어간다.
+    서양식 규격을 그대로 따른 것인데 한국에서는 못 쓴다 — 김·이·박이 학교마다 수십 명이라
+    성만으로는 아무도 못 찾고, 화면에 '하늘 김' 처럼 뒤집혀 보이기도 한다.
+
+    Get-CsOnlineUser 는 LastName 을 더 이상 주지 않는다. Exchange 의 Get-User 가 셋을 다 준다.
+
+    한 줄이 이렇게 나간다:
+        NAME<tab>UPN<tab>표시이름<tab>이름(First)<tab>성(Last)
+#>
+function Get-TeavelUserName {
+    param(
+        [int] $Limit = 5000
+    )
+
+    Import-Module ExchangeOnlineManagement -ErrorAction Stop
+
+    $users = @(Get-User -ResultSize $Limit -ErrorAction Stop)
+
+    $d = New-Object System.Collections.Generic.List[string]
+    foreach ($u in $users) {
+        $upn = ''
+        try { $upn = [string]$u.UserPrincipalName } catch { }
+        if (-not $upn) { continue }
+
+        $disp = ''; $first = ''; $last = ''
+        try { $disp  = [string]$u.DisplayName } catch { }
+        try { $first = [string]$u.FirstName }  catch { }
+        try { $last  = [string]$u.LastName }   catch { }
+
+        $d.Add(("NAME`t{0}`t{1}`t{2}`t{3}" -f $upn, $disp, $first, $last))
+    }
+
+    New-TeavelResult -Message "사람 $($users.Count)명의 이름을 읽었습니다." -Details $d
+}
+
+<#
+.SYNOPSIS
+    표시 이름 하나를 고친다.
+.DESCRIPTION
+    Graph 없이 되는 길이다 — Exchange 의 Set-User 가 디렉터리의 표시 이름을 바꾼다.
+    성·이름 칸은 건드리지 않는다. 그쪽은 다른 시스템이 쓰고 있을 수 있고,
+    우리가 고치려는 것은 '화면에 보이는 이름' 하나뿐이다.
+
+    Teams 앱에 반영되기까지 시간이 걸린다.
+#>
+function Set-TeavelDisplayName {
+    param(
+        [Parameter(Mandatory)][string] $Identity,
+        [Parameter(Mandatory)][string] $DisplayName
+    )
+
+    Import-Module ExchangeOnlineManagement -ErrorAction Stop
+
+    $before = ''
+    try { $before = [string](Get-User -Identity $Identity -ErrorAction Stop).DisplayName } catch { }
+
+    Set-User -Identity $Identity -DisplayName $DisplayName -ErrorAction Stop
+
+    New-TeavelResult -Message "'$before' → '$DisplayName'" -Details @()
+}
+
+<#
+.SYNOPSIS
     팀에 선언된 채널을 맞춘다. 없는 것만 만들고, 이미 있으면 건드리지 않는다.
 .DESCRIPTION
     여러 번 돌려도 안전해야 하므로 '만든다' 가 아니라 '맞춘다' 이다.
@@ -757,5 +822,6 @@ Export-ModuleMember -Function `
     Get-TeavelModuleDirectory, Get-TeavelM365Readiness, Install-TeavelM365Module, `
     Install-TeavelModuleFromGallery, Connect-TeavelM365, `
     Get-TeavelM365Inventory, Get-TeavelTenantUser, `
+    Get-TeavelUserName, Set-TeavelDisplayName, `
     New-TeavelM365Group, Sync-TeavelTeamChannel, `
     Rename-TeavelM365Group, Remove-TeavelM365Group

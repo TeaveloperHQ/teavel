@@ -161,6 +161,42 @@ function Remove-UnifiedGroup {
     Save-FakeStore
 }
 
+<#
+    가짜 Get-User / Set-User. 교육청 포털이 만든 계정처럼 성과 이름이 나뉘어 있다.
+#>
+$script:People = @{}
+function Get-User {
+    param($Identity, $ResultSize, $ErrorAction)
+    if ($script:People.Count -eq 0) {
+        $names = @(
+            @('teacher01', '김', '하늘'), @('teacher02', '이', '준서'),
+            @('teacher03', '남궁', '민'), @('teacher04', '박', '서연')
+        )
+        foreach ($n in $names) {
+            $upn = "$($n[0])@school.example.kr"
+            # 포털이 넣은 그대로 — 표시 이름이 '하늘 김' 처럼 뒤집혀 있다.
+            $script:People[$upn] = [pscustomobject]@{
+                UserPrincipalName = $upn; DisplayName = "$($n[2]) $($n[1])"
+                FirstName = $n[2]; LastName = $n[1]
+            }
+        }
+        # 이미 제대로 된 계정도 하나 둔다 — 건드리지 말아야 한다.
+        $script:People['teacher05@school.example.kr'] = [pscustomobject]@{
+            UserPrincipalName = 'teacher05@school.example.kr'; DisplayName = '최민준'
+            FirstName = '민준'; LastName = '최' }
+    }
+    if ($Identity) {
+        if (-not $script:People.ContainsKey($Identity)) { throw "그런 사람이 없습니다: $Identity" }
+        return $script:People[$Identity]
+    }
+    @($script:People.Values)
+}
+function Set-User {
+    param($Identity, $DisplayName, $ErrorAction)
+    if (-not $script:People.ContainsKey($Identity)) { throw "그런 사람이 없습니다: $Identity" }
+    $script:People[$Identity].DisplayName = $DisplayName
+}
+
 function Add-UnifiedGroupLinks { param($Identity, $LinkType, $Links, $ErrorAction) }
 
 <#
@@ -176,4 +212,4 @@ function Set-FakeTeamFlag {
 
 Export-ModuleMember -Function Connect-ExchangeOnline, Disconnect-ExchangeOnline,
     Get-UnifiedGroup, New-UnifiedGroup, Set-UnifiedGroup, Remove-UnifiedGroup,
-    Add-UnifiedGroupLinks, Set-FakeTeamFlag, Get-FakeGroupId
+    Add-UnifiedGroupLinks, Set-FakeTeamFlag, Get-FakeGroupId, Get-User, Set-User

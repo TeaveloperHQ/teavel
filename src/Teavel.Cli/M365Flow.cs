@@ -64,6 +64,10 @@ public sealed class M365Flow
         ShowInventory(inventory);
         await ShowPeopleAsync(host, ct).ConfigureAwait(false);
 
+        // 이름이 나뉘어 있으면 여기서 짚고 넘어간다. 팀을 만들고 사람을 넣기 시작한 뒤에
+        // 고치면 이미 여기저기에 뒤집힌 이름이 박혀 있다.
+        await FixSplitNamesAsync(host, ct).ConfigureAwait(false);
+
         // ① 정리가 먼저. 여기서 이름을 바꾼 것은 아래 대조에 곧바로 반영돼야 하므로
         //    바뀐 목록을 돌려받는다.
         inventory = await TidyAsync(host, inventory, ct).ConfigureAwait(false);
@@ -298,6 +302,167 @@ public sealed class M365Flow
         Console.WriteLine();
         Ui.Dim("      라이선스가 같은 사람끼리 묶은 것입니다. 대개 큰 쪽이 학생, 작은 쪽이 교사입니다.");
         Ui.Dim("      누구를 어느 반에 넣을지는 명단이 있어야 정할 수 있어, 여기서는 보여 주기만 합니다.");
+    }
+
+    /// <summary>
+    /// 선생님을 이름으로 찾는다. 학생과 달리 명단 파일이 필요 없다 —
+    /// 교사 계정은 이미 만들어져 있으므로 찾기만 하면 된다.
+    /// </summary>
+    public static async Task<int> FindTeacherAsync(ToolRunner tools, string? name, CancellationToken ct)
+    {
+        Ui.Title("선생님 찾기");
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            Ui.Error("누구를 찾을지 알려 주세요.");
+            Ui.Dim("      teavel 선생님 김하늘");
+            return 2;
+        }
+
+        var shell = tools.FindPowerShell();
+        if (shell is null) { Ui.Error("PowerShell 을 찾지 못했습니다."); return 2; }
+
+        await using var host = await M365Host.StartAsync(
+            shell, tools.ScriptsDirectory, Ui.Plain, ct).ConfigureAwait(false);
+
+        var conn = await host.CallAsync("Connect-TeavelM365",
+            new Dictionary<string, object?> { ["TeamsToo"] = true },
+            timeout: TimeSpan.FromMinutes(20), ct: ct).ConfigureAwait(false);
+        if (!conn.Ok) { Ui.Error(conn.Message); return 2; }
+
+        var res = await host.CallAsync("Get-TeavelTenantUser",
+            timeout: TimeSpan.FromMinutes(10), ct: ct).ConfigureAwait(false);
+        if (!res.Ok) { Ui.Error(res.Message); return 2; }
+
+        var people = UserDirectory.Parse(res.Details);
+        var clusters = UserDirectory.Cluster(people);
+        var faculty = UserDirectory.GuessFaculty(clusters);
+
+        var search = TeacherFinder.Find(people, name, faculty?.Bundle);
+        var matches = search.Matches;
+
+        Console.WriteLine();
+        if (matches.Count == 0)
+        {
+            // 있는데 감춘 것과 아예 없는 것은 다르다. 뭉뚱그리면 관리자가 헛짚는다.
+            if (search.Students.Count > 0)
+            {
+                Ui.Warn($"'{name}' 은(는) 학생 계정으로만 나옵니다. 선생님 계정이 아닙니다.");
+                foreach (var st in search.Students.Take(5))
+                    Ui.Plain($"        {st.User.DisplayName}   {st.User.Upn}");
+                Console.WriteLine();
+                Ui.Dim("      학생은 팀 소유자로 넣으면 안 됩니다 — 반 전체를 지울 수 있습니다.");
+                Ui.Dim("      찾으시는 선생님 성함이 맞는지 확인해 주세요.");
+                return 1;
+            }
+
+            Ui.Warn($"'{name}' 으로 찾은 계정이 없습니다.");
+            Ui.Dim("      성만 넣어 보셔도 됩니다. 예: 김");
+            Ui.Dim("      그래도 없으면 그 선생님은 아직 학교 계정을 못 받으신 것일 수 있습니다.");
+            return 1;
+        }
+
+        Ui.Ok($"{matches.Count}명 찾았습니다.");
+        foreach (var m in matches.Take(10))
+        {
+            Ui.Plain($"        {m.User.DisplayName}   {m.User.Upn}");
+            Ui.Dim($"            {m.Why}"
+                 + (m.User.Department.Length > 0 ? $" · {m.User.Department}" : ""));
+        }
+        if (matches.Count > 10) Ui.Dim($"        … 그 밖에 {matches.Count - 10}명");
+
+        if (!TeacherFinder.IsCertain(matches))
+        {
+            Console.WriteLine();
+            Ui.Warn("한 사람으로 좁혀지지 않았습니다. 같은 이름이 여럿일 수 있습니다.");
+            Ui.Dim("      팀 소유자로 넣을 때는 아이디까지 보고 고르셔야 합니다.");
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// 성과 이름이 나뉘어 있는 계정을 찾아 <b>합치자고 권한다.</b>
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 교육청 포털로 교사 계정을 만들면 성과 이름이 나뉘어 들어가고, 화면에 '하늘 김' 처럼
+    /// 뒤집혀 보인다. 김·이·박이 학교마다 수십 명이라 이대로 두면 <b>실제 운영에서 헷갈린다</b> —
+    /// 팀 소유자를 정하거나 사람을 찾을 때마다 누가 누구인지 알 수 없다.
+    /// </para>
+    /// <para>
+    /// 관리자는 이게 무슨 문제인지 모른다. 그래서 <b>묻지 말고 권한다</b> —
+    /// 무엇이 어떻게 바뀌는지 눈으로 보여 주고, 기본값을 '고침' 으로 둔다.
+    /// 되돌릴 수 있는 일이고(이름만 바뀐다) 안 고치면 두고두고 걸린다.
+    /// </para>
+    /// </remarks>
+    private async Task FixSplitNamesAsync(M365Host host, CancellationToken ct)
+    {
+        var res = await host.CallAsync("Get-TeavelUserName",
+            timeout: TimeSpan.FromMinutes(10), ct: ct).ConfigureAwait(false);
+        if (!res.Ok) return;
+
+        var todo = new List<(string Upn, string Now, MergedName Fix)>();
+
+        foreach (var line in res.Details)
+        {
+            var f = line.Split('\t');
+            if (f.Length < 5 || !string.Equals(f[0], "NAME", StringComparison.Ordinal)) continue;
+
+            var merged = KoreanName.Merge(f[3], f[4]);
+            if (!merged.Certain) continue;                       // 가릴 수 없으면 건드리지 않는다
+            if (!KoreanName.NeedsFixing(f[2], merged)) continue;
+
+            todo.Add((f[1], f[2], merged));
+        }
+
+        if (todo.Count == 0) return;
+
+        Console.WriteLine();
+        Ui.Warn($"이름이 나뉘어 있는 계정이 {todo.Count}개 있습니다.");
+        Ui.Plain("""
+              교육청 포털로 계정을 만들면 성과 이름이 따로 들어갑니다.
+              그러면 Teams 화면에 이름이 뒤집혀 보이고, 김·이·박 선생님이 여럿일 때
+              누가 누구인지 알 수 없습니다. 붙여 두는 편이 낫습니다.
+        """);
+
+        Console.WriteLine();
+        foreach (var t in todo.Take(8))
+            Ui.Plain($"        {t.Now,-14} →  {t.Fix.Merged,-10}   {t.Upn}");
+        if (todo.Count > 8) Ui.Dim($"        … 그 밖에 {todo.Count - 8}개");
+
+        Console.WriteLine();
+        Ui.Dim("      바뀌는 것은 화면에 보이는 이름뿐입니다. 아이디·비밀번호·파일은 그대로입니다.");
+
+        if (!_assumeYes && !Ui.Confirm("      이렇게 고칠까요?"))
+        {
+            Ui.Info("그냥 두겠습니다.");
+            return;
+        }
+
+        var done = 0;
+        var failed = new List<string>();
+
+        foreach (var t in todo)
+        {
+            var r = await host.CallAsync("Set-TeavelDisplayName", new Dictionary<string, object?>
+            {
+                ["Identity"] = t.Upn,
+                ["DisplayName"] = t.Fix.Merged,
+            }, ct: ct).ConfigureAwait(false);
+
+            if (r.Ok) done++;
+            else failed.Add($"{t.Upn} — {r.Message}");
+        }
+
+        Console.WriteLine();
+        Ui.Ok($"{done}개를 고쳤습니다.");
+        if (failed.Count > 0)
+        {
+            Ui.Warn($"{failed.Count}개는 고치지 못했습니다.");
+            foreach (var f2 in failed.Take(5)) Ui.Plain($"        {f2}");
+        }
+        Ui.Dim("      Teams 앱에 반영되기까지 시간이 걸립니다.");
     }
 
     // ──────────────────────────── 정리 ────────────────────────────
