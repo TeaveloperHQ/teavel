@@ -64,10 +64,17 @@ public static class TreeReconciler
         var byName = new Dictionary<string, ExistingGroup>(StringComparer.OrdinalIgnoreCase);
         var byNick = new Dictionary<string, ExistingGroup>(StringComparer.OrdinalIgnoreCase);
 
+        // 빈칸·밑줄만 다른 것을 잡기 위한 것. 첫 번째 것만 남긴다 —
+        // 여기 걸리면 어차피 사람이 봐야 하고, 하나만 보여 줘도 무슨 일인지 알 수 있다.
+        var byLoose = new Dictionary<string, ExistingGroup>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var e in existing)
         {
             byName.TryAdd(e.DisplayName.Trim(), e);
             if (e.MailNickname.Length > 0) byNick.TryAdd(e.MailNickname.Trim(), e);
+
+            var loose = Loosen(e.DisplayName);
+            if (loose.Length > 0) byLoose.TryAdd(loose, e);
         }
 
         var plan = new List<PlanItem>();
@@ -77,9 +84,23 @@ public static class TreeReconciler
             var hitName = byName.GetValueOrDefault(d.DisplayName.Trim());
             var hitNick = d.MailNickname.Length > 0 ? byNick.GetValueOrDefault(d.MailNickname.Trim()) : null;
 
-            // ① 아무것도 안 걸린다 — 만들면 된다.
+            // ① 아무것도 안 걸린다 — 만들기 전에 '거의 같은 이름' 이 있는지 한 번 더 본다.
             if (hitName is null && hitNick is null)
             {
+                // 실제 학교에서 이렇게 갈렸다: 테넌트에는 '3학년_4반'(30명) 이 있는데
+                // 선언은 '3학년 4반' 이었다. 밑줄과 빈칸 하나 차이라 글자로는 다른 이름이지만,
+                // 그대로 만들면 학교에 거의 같은 것이 둘 생기고 아이들이 어디로 들어갈지 모르게 된다.
+                // 지우거나 이름을 맞추는 일은 사람이 정해야 하므로 여기서 세운다.
+                var loose = byLoose.GetValueOrDefault(Loosen(d.DisplayName));
+                if (loose is not null)
+                {
+                    plan.Add(new PlanItem(d, PlanAction.Conflict,
+                        $"'{loose.DisplayName}' 과(와) 빈칸·기호만 다릅니다. "
+                      + "그대로 만들면 거의 같은 것이 둘 생깁니다.",
+                        loose));
+                    continue;
+                }
+
                 plan.Add(new PlanItem(d, PlanAction.Create, "없으므로 만듭니다."));
                 continue;
             }
@@ -121,6 +142,27 @@ public static class TreeReconciler
         }
 
         return plan;
+    }
+
+    /// <summary>
+    /// 이름에서 사람 눈에 잘 안 띄는 차이를 걷어낸다 — 빈칸 · 밑줄 · 붙임표 · 가운뎃점.
+    /// </summary>
+    /// <remarks>
+    /// 학교 이름은 손으로 붙여 온 것이라 표기가 제각각이다.
+    /// '3학년_4반' · '3학년 4반' · '3학년4반' 은 사람에게는 같은 반이지만 글자로는 다 다르다.
+    /// 여기서 걷어내는 것은 <b>구분자뿐</b>이다. 글자 자체를 건드리면(예: 숫자 무시)
+    /// 1반과 11반이 같아지는 식으로 엉뚱한 것이 겹친다.
+    /// </remarks>
+    public static string Loosen(string name)
+    {
+        var sb = new System.Text.StringBuilder(name.Length);
+        foreach (var c in name.Trim())
+        {
+            if (char.IsWhiteSpace(c)) continue;
+            if (c is '_' or '-' or '·' or '.' or '‧' or '・') continue;
+            sb.Append(char.ToLowerInvariant(c));
+        }
+        return sb.ToString();
     }
 
     /// <summary>계획을 한 줄로 요약한다.</summary>

@@ -47,7 +47,9 @@ $script:CoreModules = @(
 function Get-TeavelModuleDirectory {
     param()
 
-    $candidates = @($env:PSModulePath -split ';' | Where-Object { $_ })
+    # 구분자를 ';' 로 박아 두면 리눅스 pwsh 에서 한 덩어리가 되어 아무것도 못 찾는다.
+    # 제품은 Windows 에서만 돌지만, 리눅스에서 돌려 볼 수 있어야 고칠 수 있다.
+    $candidates = @($env:PSModulePath -split [IO.Path]::PathSeparator | Where-Object { $_ })
 
     # 내 계정 아래이면서 OneDrive 가 아닌 것
     $mine = $candidates | Where-Object {
@@ -56,8 +58,11 @@ function Get-TeavelModuleDirectory {
 
     if ($mine) { return $mine }
 
-    # 없으면 우리 폴더를 만들어 쓴다(OneDrive 가 문서 폴더를 가져간 경우가 여기 온다)
-    return (Join-Path $env:LOCALAPPDATA 'Teaveloper\Modules')
+    # 없으면 우리 폴더를 만들어 쓴다(OneDrive 가 문서 폴더를 가져간 경우가 여기 온다).
+    # LOCALAPPDATA 가 비어 있으면(Windows 밖) Join-Path 가 터지므로 마지막 버팀목을 둔다 —
+    # 여기서 예외가 나면 '준비 확인' 이라는 가장 앞 단계부터 막힌다.
+    if ($env:LOCALAPPDATA) { return (Join-Path $env:LOCALAPPDATA 'Teaveloper\Modules') }
+    return (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Teaveloper/Modules')
 }
 
 <#
@@ -391,6 +396,105 @@ function Get-TeavelM365Inventory {
 
 <#
 .SYNOPSIS
+    M365 그룹 또는 Teams 팀을 하나 만든다.
+.DESCRIPTION
+    선언(트리)과 재고를 대조해 '없다' 고 판단된 것만 여기로 온다.
+    그래도 만들기 직전에 한 번 더 확인한다 — 대조와 실행 사이에 누가 만들었을 수 있고,
+    같은 이름이 둘 생기면 나중에 정리하기가 훨씬 고약하다.
+
+    Kind:
+      m365 — 그룹만. 공유 사서함과 SharePoint 가 딸려 온다.
+      team — 팀. 만들면 M365 그룹이 함께 생긴다. MicrosoftTeams 모듈이 필요하다.
+.PARAMETER MailNickname
+    메일 주소가 되는 별칭. 영문자·숫자·붙임표·밑줄·점만 쓸 수 있다.
+    한글 이름으로 만들면 Windows 가 알아서 붙이는데 뜻이 날아가므로 반드시 지정한다.
+#>
+function New-TeavelM365Group {
+    param(
+        [Parameter(Mandatory)][string] $DisplayName,
+        [Parameter(Mandatory)][string] $MailNickname,
+        [string] $Description = '',
+        [ValidateSet('m365', 'team')][string] $Kind = 'm365',
+        [ValidateSet('standard', 'educationClass', 'educationStaff')][string] $Template = 'standard',
+        [ValidateSet('private', 'public')][string] $Visibility = 'private',
+        [string[]] $Owners = @()
+    )
+
+    Import-Module ExchangeOnlineManagement -ErrorAction Stop
+
+    if ($MailNickname -notmatch '^[A-Za-z0-9._-]+$') {
+        throw "별칭에는 영문자·숫자·붙임표·밑줄·점만 쓸 수 있습니다. (받은 값: $MailNickname)"
+    }
+
+    # 대조와 실행 사이에 생겼을 수 있다. 같은 이름이 둘이 되면 정리가 고약해진다.
+    $dup = @(Get-UnifiedGroup -ResultSize Unlimited -ErrorAction SilentlyContinue |
+             Where-Object { $_.DisplayName -eq $DisplayName -or $_.Alias -eq $MailNickname })
+    if ($dup.Count -gt 0) {
+        return New-TeavelResult -Message "'$DisplayName' 은(는) 이미 있습니다. 만들지 않았습니다." -Details @(
+            "이미 있는 것: $($dup[0].DisplayName)  [$($dup[0].Alias)]"
+        )
+    }
+
+    $d = New-Object System.Collections.Generic.List[string]
+
+    if ($Kind -eq 'team') {
+        Import-Module MicrosoftTeams -ErrorAction Stop
+
+        $tpl = switch ($Template) {
+            'educationClass' { 'EDU_Class' }
+            'educationStaff' { 'EDU_Staff' }
+            default          { $null }
+        }
+
+        $params = @{
+            DisplayName  = $DisplayName
+            MailNickName = $MailNickname
+            Visibility   = $(if ($Visibility -eq 'public') { 'Public' } else { 'Private' })
+        }
+        if ($Description) { $params['Description'] = $Description }
+        if ($tpl)         { $params['Template']    = $tpl }
+        if ($Owners.Count -gt 0) { $params['Owner'] = $Owners[0] }
+
+        $team = New-Team @params -ErrorAction Stop
+        $d.Add("팀을 만들었습니다: $DisplayName")
+        if ($tpl) { $d.Add("서식: $tpl") }
+        if ($team.GroupId) { $d.Add("그룹 id: $($team.GroupId)") }
+
+        # 소유자가 여럿이면 나머지를 붙인다.
+        foreach ($o in ($Owners | Select-Object -Skip 1)) {
+            try { Add-TeamUser -GroupId $team.GroupId -User $o -Role Owner -ErrorAction Stop; $d.Add("소유자 추가: $o") }
+            catch { $d.Add("소유자 추가 실패($o): $($_.Exception.Message)") }
+        }
+    }
+    else {
+        $params = @{
+            DisplayName = $DisplayName
+            Alias       = $MailNickname
+            AccessType  = $(if ($Visibility -eq 'public') { 'Public' } else { 'Private' })
+        }
+        if ($Description) { $params['Notes'] = $Description }
+        if ($Owners.Count -gt 0) { $params['Owner'] = $Owners[0] ; $params['Members'] = $Owners[0] }
+
+        $g = New-UnifiedGroup @params -ErrorAction Stop
+        $d.Add("그룹을 만들었습니다: $DisplayName")
+        if ($g.PrimarySmtpAddress) { $d.Add("메일 주소: $($g.PrimarySmtpAddress)") }
+
+        foreach ($o in ($Owners | Select-Object -Skip 1)) {
+            try {
+                Add-UnifiedGroupLinks -Identity $MailNickname -LinkType Owners -Links $o -ErrorAction Stop
+                $d.Add("소유자 추가: $o")
+            } catch { $d.Add("소유자 추가 실패($o): $($_.Exception.Message)") }
+        }
+    }
+
+    $d.Add('')
+    $d.Add('만들어진 것이 Teams·아웃룩에 보이기까지 몇 분 걸릴 수 있습니다.')
+
+    New-TeavelResult -Message "'$DisplayName' 을(를) 만들었습니다." -Details $d
+}
+
+<#
+.SYNOPSIS
     그룹·팀의 이름을 바꾼다. 내용은 그대로 남는다.
 .DESCRIPTION
     지우고 다시 만들면 파일·대화·팀이 전부 날아간다. 이름만 바꾸면 그대로 둔 채
@@ -495,4 +599,4 @@ function Remove-TeavelM365Group {
 Export-ModuleMember -Function `
     Get-TeavelModuleDirectory, Get-TeavelM365Readiness, Install-TeavelM365Module, `
     Install-TeavelModuleFromGallery, Connect-TeavelM365, `
-    Get-TeavelM365Inventory, Rename-TeavelM365Group, Remove-TeavelM365Group
+    Get-TeavelM365Inventory, New-TeavelM365Group, Rename-TeavelM365Group, Remove-TeavelM365Group

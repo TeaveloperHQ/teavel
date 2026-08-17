@@ -87,32 +87,96 @@ public static class ToolSelfCheck
                       + $"(스크립트가 받는 것: {string.Join(", ", declared.OrderBy(x => x))})"));
         }
 
-        // BOM 없는 .psm1 은 한국어 Windows 에서 글자가 깨진다.
-        // Windows PowerShell 5.1 은 BOM 이 없으면 UTF-8 이 아니라 시스템 코드 페이지(CP949)로
-        // 읽는다 — 파일은 멀쩡한데 교사 화면의 안내문만 전부 깨져 나온다.
-        // 실기에서 실제로 겪었다(2026-08-17, Teavel.M365.psm1).
-        foreach (var module in ToolCatalog.All.Select(t => t.Module).Distinct(StringComparer.OrdinalIgnoreCase))
+        // 아래 두 검사는 scripts\ 안의 모든 스크립트를 본다.
+        //
+        // 도구 목록에 있는 것만 보면 안 된다 — M365 기능은 상주 세션으로 도는 터라
+        // 도구 목록에 없고, 그래서 한동안 BOM 검사에서 통째로 빠져 있었다.
+        // 여기 놓인 파일은 결국 다 교사 PC 에서 돌아간다.
+        foreach (var path in EnumerateScripts(scriptsDirectory))
         {
-            var path = Path.Combine(scriptsDirectory, module + ".psm1");
-            if (!File.Exists(path)) continue;
+            var name = Path.GetFileName(path);
 
+            // ① BOM 없는 스크립트는 한국어 Windows 에서 글자가 깨진다.
+            //    Windows PowerShell 5.1 은 BOM 이 없으면 UTF-8 이 아니라 시스템 코드 페이지(CP949)로
+            //    읽는다 — 파일은 멀쩡한데 교사 화면의 안내문만 전부 깨져 나온다.
+            //    실기에서 실제로 겪었다(2026-08-17, Teavel.M365.psm1).
             if (!HasUtf8Bom(path))
-                issues.Add(new SelfCheckIssue(module,
-                    $"{module}.psm1 에 UTF-8 BOM 이 없습니다. "
-                  + "한국어 Windows 에서 안내문이 깨져 나옵니다."));
-        }
+                issues.Add(new SelfCheckIssue(name,
+                    "UTF-8 BOM 이 없습니다. 한국어 Windows 에서 안내문이 깨져 나옵니다."));
 
-        // 래퍼도 같은 이유로 확인한다.
-        var wrapper = Path.Combine(scriptsDirectory, "Invoke-TeavelTool.ps1");
-        if (File.Exists(wrapper) && !HasUtf8Bom(wrapper))
-            issues.Add(new SelfCheckIssue("Invoke-TeavelTool.ps1",
-                "UTF-8 BOM 이 없습니다. 한국어 Windows 에서 글자가 깨집니다."));
+            // ② param() 을 선언한 함수 안에서 @args 로 splatting 하는 것.
+            //    $args 는 '바인딩되지 않은 인자' 를 담는 자동 변수라, param() 이 있으면 늘 비어 있다.
+            //    그런데 splatting 은 비어 있어도 조용히 성공한다 — 매개변수 하나 없이 호출된다.
+            //    실기에서 겪었다(2026-08-17): 팀 만들기가 이름도 별칭도 없이 호출돼
+            //    빈 그룹이 하나 생기고 그다음부터 전부 실패했다. 오류 메시지는 엉뚱한 곳을 가리켰다.
+            foreach (var fn in FindEmptySplats(File.ReadAllText(path)))
+                issues.Add(new SelfCheckIssue(name,
+                    $"'{fn}' 안에서 @args 로 splatting 합니다. param() 이 있는 함수에서 $args 는 "
+                  + "항상 비어 있어, 아무 인자도 넘기지 않은 채 성공한 것처럼 보입니다."));
+        }
 
         // 같은 id 가 두 번 선언되면 Find 가 먼저 것만 돌려주므로 반드시 잡는다.
         foreach (var dup in ToolCatalog.All.GroupBy(t => t.Id, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
             issues.Add(new SelfCheckIssue(dup.Key, $"같은 id 의 도구가 {dup.Count()}개 선언돼 있습니다."));
 
         return issues;
+    }
+
+    /// <summary>scripts\ 안의 PowerShell 파일들.</summary>
+    private static IEnumerable<string> EnumerateScripts(string scriptsDirectory)
+    {
+        if (!Directory.Exists(scriptsDirectory)) return Array.Empty<string>();
+        try
+        {
+            return Directory.EnumerateFiles(scriptsDirectory, "*.ps*1", SearchOption.AllDirectories)
+                            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+        }
+        catch (IOException) { return Array.Empty<string>(); }
+    }
+
+    /// <summary>
+    /// param() 을 선언해 놓고 <c>@args</c> 로 splatting 하는 함수 이름들.
+    /// </summary>
+    /// <remarks>
+    /// <c>$args</c> 는 param() 으로 받지 <b>못한</b> 인자만 담는 자동 변수다.
+    /// param() 이 있고 인자가 전부 거기로 들어가면 <c>$args</c> 는 빈 배열이고,
+    /// <c>@args</c> splatting 은 <b>조용히 아무것도 넘기지 않는다.</b>
+    /// 실수의 모양이 늘 같다 — 해시테이블을 정성껏 채워 놓고 이름만 틀리게 부른다.
+    /// </remarks>
+    internal static IEnumerable<string> FindEmptySplats(string source)
+    {
+        foreach (Match fn in FunctionRegex.Matches(source))
+        {
+            var name = fn.Groups["name"].Value;
+            var block = FunctionBody(source, fn.Index);
+            if (block.Length == 0) continue;
+
+            // param() 이 없으면 $args 로 받는 것이 정상이다.
+            if (!Regex.IsMatch(block, @"\bparam\s*\(", RegexOptions.IgnoreCase)) continue;
+
+            // 주석 안의 @args 까지 잡으면 잔소리가 된다.
+            var code = Regex.Replace(block, @"(?m)#.*$", "");
+            if (Regex.IsMatch(code, @"@args\b")) yield return name;
+        }
+    }
+
+    /// <summary>
+    /// <paramref name="start"/> 의 함수 선언에서 중괄호 짝을 세어 본문을 잘라 낸다.
+    /// 짝이 안 맞으면 빈 문자열 — 그건 구문 오류라 다른 곳에서 걸린다.
+    /// </summary>
+    private static string FunctionBody(string source, int start)
+    {
+        var open = source.IndexOf('{', start);
+        if (open < 0) return "";
+
+        var depth = 0;
+        for (var i = open; i < source.Length; i++)
+        {
+            if (source[i] == '{') depth++;
+            else if (source[i] == '}' && --depth == 0) return source[open..(i + 1)];
+        }
+        return "";
     }
 
     /// <summary>파일이 UTF-8 BOM 으로 시작하는지.</summary>

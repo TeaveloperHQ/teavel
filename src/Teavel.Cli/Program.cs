@@ -57,6 +57,7 @@ try
         "설치" or "등록" or "install" => session.RunRegister(),
         "제거" or "등록해제" or "uninstall" => session.RunUnregister(),
         "자가점검" or "selfcheck"     => await session.RunSelfCheckAsync(cancel.Token),
+        "m365" or "그룹" or "teams"   => await session.RunM365Async(cancel.Token),
         "도움말" or "help" or "--help" => Run(PrintHelp),
         _                             => await session.HandleOneShotAsync(string.Join(' ', positional), cancel.Token),
     };
@@ -81,6 +82,9 @@ static void PrintHelp()
       teavel 목록           할 수 있는 일을 보여줍니다
       teavel 모델           말을 알아듣는 언어 모델을 내려받습니다(한 번만)
       teavel 자가점검       Teavel 자신이 온전한지 확인합니다
+
+      teavel m365           학교 그룹·Teams 를 살펴보고 정리하고 만듭니다
+                            (학교 M365 전역 관리자 전용)
 
       teavel 설치           어디서나 teavel 로 실행되게 등록합니다
       teavel 제거           그 등록을 풉니다(프로그램은 지우지 않습니다)

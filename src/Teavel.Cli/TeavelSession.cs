@@ -165,6 +165,19 @@ public sealed class TeavelSession : IAsyncDisposable
         return 0;
     }
 
+    // ─────────────────────────────── Microsoft 365 ───────────────────────────────
+
+    /// <summary>
+    /// 학교 그룹·Teams 를 살펴보고 정리하고 만든다.
+    /// </summary>
+    /// <remarks>
+    /// 다른 명령과 달리 <b>상주 PowerShell</b> 을 쓴다. 호출마다 새로 띄우면
+    /// 명령 하나마다 브라우저 로그인이 다시 뜨기 때문이다 —
+    /// 자세한 사정은 <see cref="M365.M365Host"/> 에 적어 두었다.
+    /// </remarks>
+    public Task<int> RunM365Async(CancellationToken ct)
+        => new M365Flow(_tools, AssumeYes).RunAsync(ct);
+
     // ─────────────────────────────── 언어 모델 ───────────────────────────────
 
     /// <summary>언어 모델을 내려받는다. 이미 쓸 수 있으면 알려 주고 끝낸다.</summary>
