@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Headers;
 using Teavel.Platform;
 
@@ -50,6 +50,7 @@ public static class ModelDownloader
         long approxBytes,
         ProgressCallback? progress = null,
         HttpClient? client = null,
+        bool expectGguf = true,
         CancellationToken ct = default)
     {
         if (Exists(destination)) return destination;
@@ -99,7 +100,7 @@ public static class ModelDownloader
 
             // 받은 것이 정말 모델인지 확인한다. 아니면 지운다 —
             // 깨진 .part 를 남겨 두면 다음 실행에서 그 뒤에 이어붙여 영영 낫지 않는다.
-            if (!LooksLikeGguf(part))
+            if (expectGguf && !LooksLikeGguf(part))
             {
                 TryDelete(part);
                 throw new InvalidDataException(

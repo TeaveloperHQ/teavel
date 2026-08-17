@@ -178,6 +178,51 @@ public sealed class TeavelSession : IAsyncDisposable
     public Task<int> RunM365Async(CancellationToken ct)
         => new M365Flow(_tools, AssumeYes).RunAsync(ct);
 
+    /// <summary>
+    /// 형태소 분석기를 갖춘다. 이미 있으면 아무것도 하지 않는다.
+    /// </summary>
+    /// <remarks>
+    /// 말을 알아듣는 일은 두 층으로 되어 있다. 형태소 분석기가 <b>'합쳐줘' 와 '합치기' 가
+    /// 같은 말</b>임을 알려 주고, 언어 모델이 <b>아예 다른 말투</b>를 알아본다.
+    /// 앞엣것이 훨씬 싸다 — 96MB 대 1GB.
+    /// </remarks>
+    private async Task EnsureMorphemesAsync(CancellationToken ct)
+    {
+        Ui.Title("형태소 분석기");
+
+        if (KiwiInstaller.Ready(_paths))
+        {
+            Ui.Ok("이미 갖춰져 있습니다.");
+            return;
+        }
+
+        Ui.Dim("      말의 끝바꿈을 알아보는 부품입니다. 약 96MB 이고 한 번만 받습니다.");
+        Ui.Dim("      이것만 있어도 '합쳐줘' 와 '합치기' 를 같은 말로 알아봅니다.");
+        Console.WriteLine();
+
+        try
+        {
+            var last = -1;
+            await KiwiInstaller.InstallAsync(_paths, (done, total) =>
+            {
+                if (total <= 0) return;
+                var pct = (int)(done * 100 / total);
+                if (pct == last || pct % 10 != 0) return;
+                last = pct;
+                Ui.Dim($"      {pct}%");
+            }, ct).ConfigureAwait(false);
+
+            Ui.Ok("형태소 분석기를 갖췄습니다.");
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            // 없어도 Teavel 은 돈다 — 예전 방식으로 알아들을 뿐이다. 여기서 멈추지 않는다.
+            Ui.Warn($"형태소 분석기를 갖추지 못했습니다: {ex.Message}");
+            Ui.Dim("      낱말로는 그대로 알아듣습니다. 나중에 다시 '모델' 을 치시면 재시도합니다.");
+        }
+    }
+
     /// <summary>선생님을 이름으로 찾아 계정을 알려 준다.</summary>
     public Task<int> RunFindTeacherAsync(string? name, CancellationToken ct)
         => M365Flow.FindTeacherAsync(_tools, name, ct);
@@ -374,6 +419,10 @@ public sealed class TeavelSession : IAsyncDisposable
     /// <summary>언어 모델을 내려받는다. 이미 쓸 수 있으면 알려 주고 끝낸다.</summary>
     public async Task<int> RunModelAsync(CancellationToken ct)
     {
+        // 형태소 분석기가 먼저다 — 훨씬 작고(약 96MB), 이것만 있어도 말귀가 눈에 띄게 좋아진다.
+        // 언어 모델(1GB)을 안 받거나 못 받는 분도 여기까지는 얻어 간다.
+        await EnsureMorphemesAsync(ct).ConfigureAwait(false);
+
         Ui.Title("언어 모델");
 
         if (_llm is not null)
@@ -659,6 +708,19 @@ public sealed class TeavelSession : IAsyncDisposable
         else
         {
             Ui.Warn("PATH 에 등록돼 있지 않습니다. 'teavel 설치' 로 등록하면 어디서나 teavel 만 쳐도 됩니다.");
+        }
+
+        // 말을 알아듣는 데 쓰는 것은 두 겹이다. 하나만 보고하면 교사가
+        // '왜 어떤 말은 알아듣고 어떤 말은 못 알아듣나' 를 알 길이 없다.
+        if (Morphemes.KiwiReady)
+        {
+            Ui.Ok($"형태소 분석기: Kiwi {KiwiNative.Version()} — '합쳐줘' 와 '합치기' 를 같은 말로 봅니다.");
+        }
+        else
+        {
+            Ui.Warn("형태소 분석기가 없습니다. 말끝이 다르면 놓칠 수 있습니다.");
+            if (Morphemes.Why is { Length: > 0 } why) Ui.Dim($"      {why}");
+            Ui.Dim("      'teavel 모델' 로 함께 내려받습니다.");
         }
 
         if (_llm is not null)

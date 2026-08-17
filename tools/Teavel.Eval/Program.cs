@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using Teavel.Intent;
 using Teavel.Tools;
 
@@ -89,6 +89,36 @@ if (stale.Count > 0)
 LocalLlmIntentRouter? llm = null;
 string label;
 var noGuard = false;
+
+// 형태소 분석기가 실제로 무엇을 뽑는지 눈으로 본다.
+// '붙였다' 는 말만으로는 값어치를 알 수 없다 — 나온 것을 봐야 안다.
+if (args[0] == "morph")
+{
+    var 문장 = args.Length > 1
+        ? args.Skip(1).ToArray()
+        : new[]
+        {
+            "엑셀 좀 합쳐줘",   "엑셀 파일 여러 개를 하나로 합치기",
+            "반별로 나눠줘",     "엑셀을 특정 열 값으로 나누기",
+            "작년 팀 백업해줘",  "지난 학년도 팀 보관하기",
+            "안 낸 사람 찾아줘", "미제출자 찾기",
+        };
+
+    // 어느 네이티브가 올라왔는지부터 밝힌다 — 모델과 판이 어긋나면 여기서 갈린다.
+    try { Console.WriteLine($"  네이티브: Kiwi {KiwiNative.Version()}"); }
+    catch (Exception ex) { Console.WriteLine($"  네이티브를 못 올렸습니다: {ex.Message}"); }
+
+    var 시험 = Morphemes.Content("합쳐줘");
+    Console.WriteLine(시험.Count > 0
+        ? $"형태소 분석기: 쓰는 중 (Kiwi {KiwiNative.Version()})"
+        : $"형태소 분석기: 없음 — {Morphemes.Why}");
+    Console.WriteLine();
+
+    foreach (var t in 문장)
+        Console.WriteLine($"  {t,-28} → {string.Join(" · ", Morphemes.Content(t))}");
+
+    return 0;
+}
 
 if (args[0] == "keyword") label = "모델 없음 (낱말 라우터만)";
 else if (args[0] is "model" or "noguard" && args.Length >= 2)

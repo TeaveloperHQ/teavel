@@ -40,6 +40,45 @@ public static class TeavelModelConfig
     /// <summary>진행률 표시와 '덜 받았는지' 판단에 쓰는 근사 크기(Qwen2.5-1.5B-Instruct Q4_K_M 기준).</summary>
     public const long ModelApproxBytes = 1_117_320_704L;
 
+    /// <summary>
+    /// 형태소 분석기(Kiwi) — 판을 못 박는다.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 생기부 도우미가 쓰던 것을 가져왔다. 형태소 분석기는 우리가 손볼 것이 없는 부품이라
+    /// 두 벌 만들 까닭이 없다.
+    /// </para>
+    /// <para>
+    /// <b>모델과 네이티브의 판이 반드시 같아야 한다.</b> 처음에는 생기부의 모델 주소를
+    /// 그대로 썼는데(0.23.0) 네이티브(0.23.2)와 짝이 안 맞아 이렇게 끝났다 —
+    /// <c>Cannot open morphology file 'sj.morph'</c>. 그 모델에는 그 파일이 아예 없었다.
+    /// 그래서 둘 다 만든 곳의 같은 릴리스에서 받는다.
+    /// </para>
+    /// <para>
+    /// 언어 모델(1GB)보다 훨씬 작아서(약 84MB) 먼저 받기에 알맞다.
+    /// 이것만 있어도 '합쳐줘' 와 '합치기' 를 같은 말로 알아본다.
+    /// </para>
+    /// </remarks>
+    public const string KiwiVersion = "0.23.2";
+
+    private const string KiwiRelease = "https://github.com/bab2min/Kiwi/releases/download/v" + KiwiVersion;
+
+    /// <summary>형태소 모델(모든 플랫폼 공통).</summary>
+    public static readonly string KiwiModelUrl =
+        Environment.GetEnvironmentVariable("TEAVEL_KIWI_MODEL_URL")
+        ?? $"{KiwiRelease}/kiwi_model_v{KiwiVersion}_base.tgz";
+
+    public const long KiwiModelApproxBytes = 88_069_580L;
+
+    /// <summary>C-API 네이티브. 플랫폼마다 다르다.</summary>
+    public static string KiwiNativeUrl =>
+        Environment.GetEnvironmentVariable("TEAVEL_KIWI_NATIVE_URL")
+        ?? (OperatingSystem.IsWindows()
+            ? $"{KiwiRelease}/kiwi_win_x64_v{KiwiVersion}.zip"
+            : $"{KiwiRelease}/kiwi_lnx_x86_64_v{KiwiVersion}.tgz");
+
+    public static long KiwiNativeApproxBytes => OperatingSystem.IsWindows() ? 36_700_160L : 12_582_912L;
+
     /// <summary>내려받을 주소가 정해져 있는지.</summary>
     public static bool HasDownloadUrl => !string.IsNullOrWhiteSpace(ModelUrl);
 

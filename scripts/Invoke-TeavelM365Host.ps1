@@ -182,6 +182,29 @@ while ($true) {
         }
     }
 
+    # 필수 매개변수가 빠졌으면 여기서 끊는다.
+    #
+    # 안 그러면 PowerShell 이 "Supply values for the following parameters:" 를 띄우고
+    # <b>바로 이 stdin 에서</b> 값을 읽는다 — 그런데 이 stdin 은 우리가 JSON 명령을
+    # 흘려보내는 통로다. 다음 명령이 통째로 답으로 먹히고, 그 뒤로는 모든 것이 한 칸씩
+    # 밀린다. 확인 창(-Confirm)으로 똑같이 당한 적이 있어 이쪽도 함께 막는다.
+    # 이 세션은 로그인 창이 떠야 해서 -NonInteractive 를 쓸 수 없다.
+    $cmdInfo = Get-Command -Name $fn -CommandType Function -ErrorAction SilentlyContinue
+    if ($cmdInfo) {
+        $missing = @()
+        foreach ($kv in $cmdInfo.Parameters.GetEnumerator()) {
+            $isRequired = $kv.Value.Attributes |
+                Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] -and $_.Mandatory }
+            if ($isRequired -and -not $callArgs.ContainsKey($kv.Key)) { $missing += $kv.Key }
+        }
+        if ($missing.Count -gt 0) {
+            Write-TeavelReply -Ok $false `
+                -Message "'$fn' 에 필요한 값이 빠졌습니다: $($missing -join ', ')" `
+                -Details @('Teavel 의 도구 선언과 스크립트가 어긋났습니다. 자가점검을 실행해 주세요.')
+            continue
+        }
+    }
+
     try {
         $result = & $fn @callArgs
 

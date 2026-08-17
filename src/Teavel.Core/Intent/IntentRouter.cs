@@ -84,8 +84,40 @@ public sealed class KeywordIntentRouter : IIntentRouter
         return Task.FromResult(result);
     }
 
-    /// <summary>한국어를 형태소로 나누지 않고, 조사만 떼어 낸 낱말 뭉치로 만든다.</summary>
+    /// <summary>
+    /// 낱말 뭉치로 만든다. 형태소 분석기가 있으면 그것을 쓰고, 없으면 예전 방식으로.
+    /// </summary>
+    /// <remarks>
+    /// 예전 방식은 <b>끝 한 글자를 떼는 것</b>이 전부라 '합쳐줘' 와 '합치기' 가
+    /// 같은 말인 줄 몰랐다. 형태소로 나누면 둘 다 '합치' 가 되어 맞는다.
+    ///
+    /// 없어도 돈다 — 예전 방식으로 내려갈 뿐이다.
+    /// </remarks>
     private static List<string> Tokenize(string text)
+    {
+        // 형태소와 예전 방식을 함께 쓴다.
+        //
+        // 세 가지를 재 봤다(24문장, 모델 없이).
+        //
+        //                바로·맞음  바로·틀림  골라야(정답O)  골라야(정답X)  못알아들음
+        //   형태소 없음        4          0           19             0            1
+        //   형태소만           4          0           19             1            0
+        //   둘 다(지금)        3          0           21             0            0
+        //
+        // 즉시 정답 하나를 내주고 <b>막다른 길을 둘 다 없앤다.</b>
+        // 넘겨짚지 않되 정답은 반드시 목록에 있어야 한다는 원칙에 이쪽이 맞다.
+        // 형태소를 더하면 겹침의 분모가 커져 점수가 내려가는데, 그 대가로
+        // '합쳐줘 = 합치기' 를 알아보고 '못 알아들음' 이 사라진다.
+        var byMorph = Morphemes.Content(text);
+        if (byMorph.Count == 0) return Crude(text);
+
+        var merged = new List<string>(byMorph);
+        merged.AddRange(Crude(text));
+        return merged;
+    }
+
+    /// <summary>형태소 분석기가 없을 때 — 조사만 대충 떼어 낸다.</summary>
+    private static List<string> Crude(string text)
     {
         var raw = text.Split(
             new[] { ' ', '\t', '\n', ',', '.', '!', '?', '"', '\'', '(', ')', '[', ']', '·' },
