@@ -32,4 +32,40 @@
     </None>
   </ItemGroup>
 
+
+  <!--
+    다른 플랫폼용 네이티브 파일을 배포에서 걷어낸다.
+
+    LLamaSharp.Backend.Cpu 는 리눅스·macOS·ARM 것을 한꺼번에 담고 있고, 그것들이
+    win-x64 배포에도 그대로 따라온다. 실측(2026-08-17): 네이티브 93.7MB 중
+    win-x64 는 16.7MB 뿐이고 나머지 77MB 는 교사 PC 에서 절대 쓰이지 않는다.
+    exe 가 144MB 인 이유의 절반이 이것이다.
+
+    ■ 지울 것만 적는다
+
+    처음에는 '지금 RID 가 아닌 것을 다 지운다' 고 썼다가 win-x64 것까지 지웠다 —
+    RelativePath 의 모양을 짐작한 탓이다. llama.dll 이 통째로 사라졌는데
+    빌드는 멀쩡히 끝나서, 교사 PC 에서 언어 모델을 쓸 때에야 터졌을 것이다.
+
+    그래서 지울 것을 못 박는다. 새 플랫폼이 늘면 여기 더하면 되고,
+    빠뜨려도 조금 커질 뿐 동작이 깨지지는 않는다.
+
+    AVX 갈래(avx·avx2·avx512·noavx)는 남긴다 — 어느 것을 쓸지는 그 PC 의 CPU 를 보고
+    실행 시점에 정해진다. 하나만 남기면 오래된 교사 PC 에서 아예 못 돌 수 있다.
+  -->
+  <Target Name="TeavelTrimForeignRuntimes" AfterTargets="ComputeResolvedFilesToPublishList"
+          Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+    <ItemGroup>
+      <_TeavelForeign Include="@(ResolvedFileToPublish)"
+        Condition="$([System.String]::Copy('%(ResolvedFileToPublish.RelativePath)').Replace('\','/').Contains('/linux-'))
+                OR $([System.String]::Copy('%(ResolvedFileToPublish.RelativePath)').Replace('\','/').Contains('/osx-'))
+                OR $([System.String]::Copy('%(ResolvedFileToPublish.RelativePath)').Replace('\','/').Contains('/win-arm64/'))
+                OR $([System.String]::Copy('%(ResolvedFileToPublish.RelativePath)').Replace('\','/').StartsWith('runtimes/linux-'))
+                OR $([System.String]::Copy('%(ResolvedFileToPublish.RelativePath)').Replace('\','/').StartsWith('runtimes/osx-'))
+                OR $([System.String]::Copy('%(ResolvedFileToPublish.RelativePath)').Replace('\','/').StartsWith('runtimes/win-arm64/'))" />
+      <ResolvedFileToPublish Remove="@(_TeavelForeign)" />
+    </ItemGroup>
+    <Message Importance="high" Text="Teavel: 다른 플랫폼 네이티브 @(_TeavelForeign->Count()) 개를 뺐습니다." />
+  </Target>
+
 </Project>
