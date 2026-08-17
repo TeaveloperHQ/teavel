@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using Teavel.Cli;
 
 // 한글이 깨지지 않도록. PowerShell 창의 기본 코드 페이지는 UTF-8 이 아닌 경우가 많다.
@@ -58,6 +58,7 @@ try
         "제거" or "등록해제" or "uninstall" => session.RunUnregister(),
         "자가점검" or "selfcheck"     => await session.RunSelfCheckAsync(cancel.Token),
         "m365" or "그룹" or "teams"   => await session.RunM365Async(cancel.Token),
+        "명단" or "roster"            => RosterFlow.Run(argument),
         "도움말" or "help" or "--help" => Run(PrintHelp),
         _                             => await session.HandleOneShotAsync(string.Join(' ', positional), cancel.Token),
     };
@@ -85,6 +86,7 @@ static void PrintHelp()
 
       teavel m365           학교 그룹·Teams 를 살펴보고 정리하고 만듭니다
                             (학교 M365 전역 관리자 전용)
+      teavel 명단 <파일>    명단 파일을 읽어 학년·반·번호·학번·이름·ID 로 정리합니다
 
       teavel 설치           어디서나 teavel 로 실행되게 등록합니다
       teavel 제거           그 등록을 풉니다(프로그램은 지우지 않습니다)
