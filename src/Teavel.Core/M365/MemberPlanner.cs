@@ -1,4 +1,4 @@
-using Teavel.Roster;
+﻿using Teavel.Roster;
 
 namespace Teavel.M365;
 
@@ -64,6 +64,17 @@ public static class MemberPlanner
         foreach (var p in plan)
         {
             if (p.Declared.Kind != GroupKind.Team) continue;
+
+            // '확인 필요' 로 세운 것은 사람이 판단하기 전까지 손대지 않는다.
+            //
+            // 실기에서 이럴 뻔했다(2026-08-17): 명단의 '3학년 4반' 이 테넌트의 '3학년_4반'
+            // 과 빈칸만 달라 확인 필요로 세워 놓고서는, 학생 넣기에서 그 진짜 반(30명)에
+            // 명단의 학생을 넣으려 했다. 만들지는 않으면서 사람은 넣는 꼴이다.
+            //
+            // 확인 필요라는 것은 '이것이 같은 반인지 우리가 모른다' 는 뜻이다.
+            // 모르는 채로 아이를 넣으면 엉뚱한 반에 들어간다.
+            if (p.Action != PlanAction.Skip) continue;
+
             if (p.Existing is not { IsTeam: true }) continue;
 
             var g = Pick(p.Declared.Values, GradeKeys);

@@ -954,17 +954,32 @@ public sealed class M365Flow
     {
         Ui.Title("⑦ 학생 넣기");
 
+        // 대조를 다시 한다 — 방금 만든 팀이 재고에 반영돼 있어야 하기 때문이다.
+        // 이건 메일·그룹 쪽이라 팀 로그인 없이 된다.
+        var fresh = await ReadInventoryAsync(host, ct, quiet: true).ConfigureAwait(false);
+        if (fresh is null) return;
+
+        var plan = TreeReconciler.Plan(groups, fresh);
+
+        // 넣을 팀이 하나도 없으면 로그인을 시키지 않는다.
+        // 할 일도 없는데 두 번째 로그인을 요구하는 것은 그 자체로 벽이다.
+        var dry = MemberPlanner.Plan(roster.Rows, plan,
+            new Dictionary<string, IReadOnlyList<TeamMember>>(StringComparer.OrdinalIgnoreCase));
+
+        if (dry.All(a => a.Team is null))
+        {
+            Console.WriteLine();
+            Ui.Info("명단의 반과 맞는 팀이 없어 넣을 곳이 없습니다.");
+            foreach (var a in dry.Where(a => a.Problem.Length > 0).Take(5))
+                Ui.Dim($"      {a.ClassKey} — {a.Problem}");
+            return;
+        }
+
         if (!await EnsureTeamsAsync(host, ct).ConfigureAwait(false))
         {
             Ui.Warn("팀에 붙지 못해 학생을 넣지 못합니다. 팀은 그대로 있습니다.");
             return;
         }
-
-        // 대조를 다시 한다 — 방금 만든 팀이 재고에 반영돼 있어야 하기 때문이다.
-        var fresh = await ReadInventoryAsync(host, ct, quiet: true).ConfigureAwait(false);
-        if (fresh is null) return;
-
-        var plan = TreeReconciler.Plan(groups, fresh);
 
         // 이미 들어 있는 사람을 알아야 여러 번 돌려도 안전하다.
         var teams = plan.Where(p => p.Existing is { IsTeam: true, GroupId.Length: > 0 })
