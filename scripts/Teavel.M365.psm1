@@ -23,40 +23,134 @@
 Set-StrictMode -Version Latest
 
 # 팀·그룹 작업에 필요한 모듈. Graph 는 보안 그룹(고급)에서만 쓴다.
-$script:CoreModules = @('MicrosoftTeams', 'ExchangeOnlineManagement')
+# 최소 버전은 낮게 잡는다 — 3.x 면 우리가 쓰는 것은 다 있다.
+# (Connect-ExchangeOnline -Device 는 필요 없다. 교사 PC 에서는 브라우저 창이 그냥 뜬다)
+$script:CoreModules = @(
+    @{ Name = 'ExchangeOnlineManagement'; Min = [version]'3.0.0'; What = '그룹·메일' }
+    @{ Name = 'MicrosoftTeams';           Min = [version]'4.0.0'; What = '팀'       }
+)
+
+<#
+.SYNOPSIS
+    PowerShell 이 실제로 모듈을 찾는 폴더 중, 내 계정 것이면서 OneDrive 밖인 곳.
+.DESCRIPTION
+    경로를 짐작하면 반드시 틀린다. 두 가지가 겹치기 때문이다.
+
+      · OneDrive 폴더 백업이 켜져 있으면 문서 폴더가 OneDrive 아래로 옮겨진다.
+        한국어 Windows 에서는 이름이 '문서' 라 영문 'Documents' 로 짐작하면 없다.
+      · 그런데 OneDrive 아래에 모듈을 두면 파일 온디맨드로 DLL 이 자리표시자가 되어
+        어셈블리 로드가 실패할 수 있다.
+
+    그래서 $env:PSModulePath 를 읽되 OneDrive 아래는 피하고, 마땅한 곳이 없으면
+    %LOCALAPPDATA% 에 우리 폴더를 만들어 쓴다.
+#>
+function Get-TeavelModuleDirectory {
+    param()
+
+    $candidates = @($env:PSModulePath -split ';' | Where-Object { $_ })
+
+    # 내 계정 아래이면서 OneDrive 가 아닌 것
+    $mine = $candidates | Where-Object {
+        $_ -like "*\Users\$env:USERNAME\*" -and $_ -notmatch '\\OneDrive\\'
+    } | Select-Object -First 1
+
+    if ($mine) { return $mine }
+
+    # 없으면 우리 폴더를 만들어 쓴다(OneDrive 가 문서 폴더를 가져간 경우가 여기 온다)
+    return (Join-Path $env:LOCALAPPDATA 'Teaveloper\Modules')
+}
 
 <#
 .SYNOPSIS
     M365 작업에 필요한 것이 갖춰졌는지 본다. 아무것도 설치하거나 바꾸지 않는다.
+.DESCRIPTION
+    '있는지' 가 아니라 '쓸 만한 판이 있는지' 를 본다 — 너무 낮은 판이 깔려 있으면
+    나중에 없는 매개변수에서 터진다.
 #>
 function Get-TeavelM365Readiness {
     param()
 
     $d = New-Object System.Collections.Generic.List[string]
-    $missing = New-Object System.Collections.Generic.List[string]
+    $need = New-Object System.Collections.Generic.List[string]
 
-    foreach ($m in $script:CoreModules) {
-        $found = @(Get-Module -ListAvailable -Name $m -ErrorAction SilentlyContinue)
-        if ($found.Count -gt 0) {
-            $v = ($found | Sort-Object Version -Descending)[0].Version
-            $d.Add("$m  $v")
+    foreach ($spec in $script:CoreModules) {
+        $found = @(Get-Module -ListAvailable -Name $spec.Name -ErrorAction SilentlyContinue |
+                   Sort-Object Version -Descending)
+
+        if ($found.Count -eq 0) {
+            $need.Add($spec.Name)
+            $d.Add(("{0,-26} 없음        ({1})" -f $spec.Name, $spec.What))
+            continue
+        }
+
+        $best = $found[0]
+        if ($best.Version -lt $spec.Min) {
+            $need.Add($spec.Name)
+            $d.Add(("{0,-26} {1} — 낮음 ({2} 이상 필요)" -f $spec.Name, $best.Version, $spec.Min))
         } else {
-            $missing.Add($m)
-            $d.Add("$m  — 없음")
+            $d.Add(("{0,-26} {1}" -f $spec.Name, $best.Version))
+        }
+
+        # 판이 여럿이면 PowerShell 이 높은 것을 잡는데, 그게 깨져 있으면 낮은 것도 못 쓴다.
+        if ($found.Count -gt 1) {
+            $d.Add(("{0,-26} ! 판이 {1}개 깔려 있습니다: {2}" -f '', $found.Count, (($found.Version) -join ', ')))
         }
     }
 
     $d.Add('')
     $d.Add("PowerShell $($PSVersionTable.PSVersion)")
+    $d.Add("설치할 곳    $(Get-TeavelModuleDirectory)")
 
-    if ($missing.Count -gt 0) {
+    if ($need.Count -gt 0) {
         $d.Add('')
-        $d.Add('설치가 필요합니다. Teavel 이 대신 설치해 드릴 수 있습니다.')
+        $d.Add('Teavel 이 대신 설치해 드릴 수 있습니다.')
         $d.Add('(내 계정에만 설치되며 관리자 권한이 필요 없습니다)')
-        return New-TeavelResult -Message "필요한 모듈 $($missing.Count)개가 없습니다." -Details $d
+        return New-TeavelResult -Message "손봐야 할 모듈이 $($need.Count)개 있습니다." -Details $d
     }
 
-    New-TeavelResult -Message '필요한 모듈이 모두 있습니다.' -Details $d
+    New-TeavelResult -Message '필요한 모듈이 모두 갖춰져 있습니다.' -Details $d
+}
+
+<#
+.SYNOPSIS
+    PowerShell 갤러리에서 모듈을 직접 받아 푼다. PowerShellGet 을 거치지 않는다.
+.DESCRIPTION
+    Install-Module 은 PS 5.1 에서 자주 막힌다 — PackageManagement 가 현재 세션에
+    물려 있으면 갱신 자체가 안 되고, 그걸 푸는 데 프로세스를 새로 띄워야 한다.
+    갤러리의 패키지는 그냥 zip 이므로 받아서 풀면 그 사슬을 통째로 건너뛴다.
+#>
+function Install-TeavelModuleFromGallery {
+    param(
+        [Parameter(Mandatory)][string] $Name,
+        [Parameter(Mandatory)][string] $Version,
+        [Parameter(Mandatory)][string] $Directory
+    )
+
+    $target = Join-Path $Directory "$Name\$Version"
+    $tmp    = Join-Path $env:TEMP "teavel-$Name-$Version.zip"
+
+    try {
+        Invoke-WebRequest "https://www.powershellgallery.com/api/v2/package/$Name/$Version" `
+            -OutFile $tmp -UseBasicParsing -ErrorAction Stop
+
+        if (Test-Path $target) { Remove-Item $target -Recurse -Force }
+        New-Item -ItemType Directory -Force $target | Out-Null
+
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::ExtractToDirectory($tmp, $target)
+
+        # nupkg 부산물은 모듈 폴더에 있으면 지저분하다.
+        foreach ($junk in '_rels', 'package', '[Content_Types].xml', "$Name.nuspec") {
+            $p = Join-Path $target $junk
+            if (Test-Path $p) { Remove-Item $p -Recurse -Force }
+        }
+
+        # 인터넷에서 받은 표시(MOTW)가 붙어 있으면 DLL 로드가 막힌다.
+        Get-ChildItem $target -Recurse -File | Unblock-File -ErrorAction SilentlyContinue
+    }
+    finally {
+        if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 <#
@@ -64,38 +158,103 @@ function Get-TeavelM365Readiness {
     M365 작업에 필요한 모듈을 내 계정에만 설치한다.
 .DESCRIPTION
     -Scope CurrentUser 이므로 관리자 권한이 필요 없다.
-    학교 네트워크가 PowerShell 갤러리를 막고 있으면 여기서 실패한다 — 그때는
-    전산 담당에게 알릴 수 있도록 이유를 그대로 전한다.
+
+    실제 교사 PC(Windows 11 · PowerShell 5.1)에서 이 일을 해 보면 관문이 여럿이다.
+    하나씩 넘어간다:
+
+      ① TLS 가 SystemDefault 면 갤러리에 연결조차 안 된다 → 1.2 로 올린다
+      ② PSGallery 가 Untrusted 면 "정말 하시겠습니까?" 에서 멈춘다 → 그 세션에서만 신뢰로
+      ③ PowerShellGet 1.0.0.1 은 낡아 -Force 가 안 먹는 구석이 있다
+      ④ PackageManagement 가 물려 있으면 갱신 자체가 막힌다
+      ③④ 는 풀기 번거로우므로, Install-Module 이 실패하면 갤러리에서 직접 받아 푼다.
+
+    설치 위치는 짐작하지 않는다 — Get-TeavelModuleDirectory 를 보라.
 #>
 function Install-TeavelM365Module {
-    param()
+    param(
+        [string] $Only
+    )
 
-    $installed = New-Object System.Collections.Generic.List[string]
-    $failed    = New-Object System.Collections.Generic.List[string]
+    # ① 갤러리는 TLS 1.2 이상만 받는다.
+    try {
+        [Net.ServicePointManager]::SecurityProtocol =
+            [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    } catch { }
 
-    foreach ($m in $script:CoreModules) {
-        if (@(Get-Module -ListAvailable -Name $m -ErrorAction SilentlyContinue).Count -gt 0) { continue }
-        try {
-            Install-Module -Name $m -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
-            $installed.Add($m)
-        } catch {
-            $failed.Add("$m — $($_.Exception.Message)")
+    # ② 이 세션에서만 신뢰로 바꾼다. 원래 값은 끝나고 돌려놓는다 —
+    #    교사 PC 의 설정을 우리가 말없이 바꿔 두면 안 된다.
+    $policyBefore = $null
+    try {
+        $repo = Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue
+        if ($repo -and $repo.InstallationPolicy -ne 'Trusted') {
+            $policyBefore = $repo.InstallationPolicy
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
+        }
+    } catch { }
+
+    $dir = Get-TeavelModuleDirectory
+    New-Item -ItemType Directory -Force $dir | Out-Null
+
+    $done   = New-Object System.Collections.Generic.List[string]
+    $failed = New-Object System.Collections.Generic.List[string]
+
+    try {
+        foreach ($spec in $script:CoreModules) {
+            if ($Only -and $spec.Name -ne $Only) { continue }
+
+            $have = @(Get-Module -ListAvailable -Name $spec.Name -ErrorAction SilentlyContinue |
+                      Sort-Object Version -Descending)
+            if ($have.Count -gt 0 -and $have[0].Version -ge $spec.Min) {
+                $done.Add("$($spec.Name) $($have[0].Version) — 이미 쓸 만합니다")
+                continue
+            }
+
+            # ③④ 를 피해 Install-Module 을 먼저 시도하고, 막히면 직접 받는다.
+            $ok = $false
+            try {
+                Install-Module -Name $spec.Name -Scope CurrentUser -Force -AllowClobber `
+                    -SkipPublisherCheck -ErrorAction Stop
+                $ok = $true
+                $done.Add("$($spec.Name) 설치 완료")
+            } catch {
+                $done.Add("$($spec.Name) — 갤러리에서 직접 받습니다")
+            }
+
+            if (-not $ok) {
+                try {
+                    $latest = (Find-Module -Name $spec.Name -ErrorAction Stop |
+                               Sort-Object Version -Descending | Select-Object -First 1).Version.ToString()
+                    Install-TeavelModuleFromGallery -Name $spec.Name -Version $latest -Directory $dir
+                    if ($env:PSModulePath -notlike "*$dir*") { $env:PSModulePath = "$dir;$env:PSModulePath" }
+                    $done.Add("$($spec.Name) $latest 설치 완료 ($dir)")
+                } catch {
+                    $failed.Add("$($spec.Name) — $($_.Exception.Message)")
+                }
+            }
+        }
+    }
+    finally {
+        if ($policyBefore) {
+            try { Set-PSRepository -Name PSGallery -InstallationPolicy $policyBefore -ErrorAction SilentlyContinue } catch { }
         }
     }
 
     if ($failed.Count -gt 0) {
         $d = New-Object System.Collections.Generic.List[string]
-        foreach ($f in $failed) { $d.Add($f) }
+        foreach ($x in $done)   { $d.Add($x) }
+        foreach ($x in $failed) { $d.Add($x) }
         $d.Add('')
-        $d.Add('학교 네트워크가 PowerShell 갤러리를 막고 있을 수 있습니다.')
+        $d.Add('학교 네트워크가 PowerShell 갤러리(www.powershellgallery.com)를 막고 있을 수 있습니다.')
         $d.Add('전산 담당 선생님께 위 메시지를 그대로 전해 주세요.')
         throw ("모듈을 설치하지 못했습니다: " + ($failed -join ' / '))
     }
 
-    if ($installed.Count -eq 0) {
-        return New-TeavelResult -Message '이미 다 설치돼 있습니다.'
-    }
-    New-TeavelResult -Message "모듈 $($installed.Count)개를 설치했습니다." -Details $installed
+    $d = New-Object System.Collections.Generic.List[string]
+    foreach ($x in $done) { $d.Add($x) }
+    $d.Add('')
+    $d.Add('PowerShell 창을 새로 열면 확실히 반영됩니다.')
+
+    New-TeavelResult -Message '모듈 준비를 마쳤습니다.' -Details $d
 }
 
 <#
@@ -109,37 +268,70 @@ function Install-TeavelM365Module {
 #>
 function Connect-TeavelM365 {
     param(
-        [string] $Account
+        [string] $Account,
+        [switch] $TeamsToo
     )
 
-    Import-Module MicrosoftTeams -ErrorAction Stop
     Import-Module ExchangeOnlineManagement -ErrorAction Stop
 
     $d = New-Object System.Collections.Generic.List[string]
 
-    # 이미 붙어 있으면 그대로 쓴다.
-    $teamsOk = $false
-    try { $null = Get-CsTenant -ErrorAction Stop; $teamsOk = $true } catch { }
-
-    if (-not $teamsOk) {
-        if ($Account) { Connect-MicrosoftTeams -AccountId $Account -ErrorAction Stop | Out-Null }
-        else          { Connect-MicrosoftTeams -ErrorAction Stop | Out-Null }
-    }
-
+    # 이미 붙어 있으면 아무 말 없이 그대로 쓴다.
     $exoOk = $false
     try { $null = Get-OrganizationConfig -ErrorAction Stop; $exoOk = $true } catch { }
 
     if (-not $exoOk) {
-        if ($Account) { Connect-ExchangeOnline -UserPrincipalName $Account -ShowBanner:$false -ErrorAction Stop }
-        else          { Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop }
+        # ── 멈추기 전에 먼저 말한다 ──
+        # 로그인 창이 뜬다는 걸 모르면 콘솔이 멈춘 줄 알고 닫아 버린다.
+        # 결과로 돌려주면 늦다 — 기다리는 동안 화면에 아무것도 없기 때문이다.
+        # 그래서 Write-Host 로 지금 찍는다(래퍼의 JSON 은 마지막 '{' 부터 읽으므로 안전하다).
+        Write-Host ''
+        Write-Host '  ┌─────────────────────────────────────────────────┐'
+        Write-Host '  │  잠시 후 인터넷 창이 하나 저절로 열립니다        │'
+        Write-Host '  └─────────────────────────────────────────────────┘'
+        Write-Host ''
+        Write-Host '  ① 열린 창에 학교 메일 주소를 넣고 [다음]'
+        Write-Host '  ② 비밀번호를 넣습니다'
+        Write-Host '  ③ "로그인 상태를 유지하시겠습니까?" 가 나오면 [예]'
+        Write-Host ''
+        Write-Host '  창이 안 보이면 — 다른 창 뒤에 숨어 있을 수 있습니다.'
+        Write-Host '  화면 맨 아래 줄(작업 표시줄)에서 새로 생긴 인터넷 아이콘을 눌러 보세요.'
+        Write-Host ''
+        Write-Host '  로그인을 마치면 이 화면으로 저절로 돌아옵니다.'
+        Write-Host '  그때까지 이 창을 닫지 마세요.'
+        Write-Host ''
+        Write-Host '  기다리는 중…'
+        Write-Host ''
+
+        try {
+            if ($Account) { Connect-ExchangeOnline -UserPrincipalName $Account -ShowBanner:$false -ErrorAction Stop }
+            else          { Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop }
+        } catch {
+            throw ("로그인하지 못했습니다: " + $_.Exception.Message + "`n" +
+                   "창을 닫으셨거나, 학교 계정이 아니거나, 전역 관리자가 아닐 수 있습니다.")
+        }
+    }
+
+    # 팀을 만들 때만 필요하다. 재고를 보는 데는 Exchange 하나면 되므로
+    # 로그인을 두 번 시키지 않는다 — 한 번도 버거운 분들이 대상이다.
+    $teamsOk = $null
+    if ($TeamsToo) {
+        Import-Module MicrosoftTeams -ErrorAction Stop
+        try { $null = Get-CsTenant -ErrorAction Stop; $teamsOk = $true } catch { $teamsOk = $false }
+        if (-not $teamsOk) {
+            Write-Host ''
+            Write-Host '  팀 작업을 위해 한 번 더 로그인 창이 열립니다. 같은 계정으로 하시면 됩니다.'
+            Write-Host ''
+            if ($Account) { Connect-MicrosoftTeams -AccountId $Account -ErrorAction Stop | Out-Null }
+            else          { Connect-MicrosoftTeams -ErrorAction Stop | Out-Null }
+        }
     }
 
     $org = $null
     try { $org = Get-OrganizationConfig -ErrorAction SilentlyContinue } catch { }
-    if ($org) { $d.Add("테넌트: $($org.DisplayName)") }
-
-    $d.Add("Teams: $(if ($teamsOk) { '이미 연결됨' } else { '새로 연결' })")
-    $d.Add("Exchange: $(if ($exoOk) { '이미 연결됨' } else { '새로 연결' })")
+    if ($org) { $d.Add("학교: $($org.DisplayName)") }
+    $d.Add("메일·그룹: $(if ($exoOk) { '이미 연결돼 있었습니다' } else { '연결했습니다' })")
+    if ($TeamsToo) { $d.Add("팀: $(if ($teamsOk) { '이미 연결돼 있었습니다' } else { '연결했습니다' })") }
 
     New-TeavelResult -Message '학교 M365 에 연결했습니다.' -Details $d
 }
@@ -301,5 +493,6 @@ function Remove-TeavelM365Group {
 }
 
 Export-ModuleMember -Function `
-    Get-TeavelM365Readiness, Install-TeavelM365Module, Connect-TeavelM365, `
+    Get-TeavelModuleDirectory, Get-TeavelM365Readiness, Install-TeavelM365Module, `
+    Install-TeavelModuleFromGallery, Connect-TeavelM365, `
     Get-TeavelM365Inventory, Rename-TeavelM365Group, Remove-TeavelM365Group
