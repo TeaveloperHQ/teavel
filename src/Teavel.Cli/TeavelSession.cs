@@ -311,6 +311,18 @@ public sealed class TeavelSession : IAsyncDisposable
                 await RunM365Async(ct).ConfigureAwait(false);
                 return;
 
+            case "install":
+                RunRegister();
+                return;
+
+            case "uninstall":
+                RunUnregister();
+                return;
+
+            case "model":
+                await RunModelAsync(ct).ConfigureAwait(false);
+                return;
+
             case "m365.teacher":
                 var name = match.Arguments.TryGetValue("Name", out var n) ? n?.ToString() : null;
                 if (string.IsNullOrWhiteSpace(name)) name = Ui.Ask("      찾으실 선생님 성함: ")?.Trim();
@@ -482,6 +494,54 @@ public sealed class TeavelSession : IAsyncDisposable
     /// 설치 단계가 관리자 권한으로 돌아 엉뚱한 계정에 등록된 경우를 여기서 건진다.
     /// 한 번 거절하면 다시 묻지 않는다 — 매번 물으면 그게 더 성가시다.
     /// </remarks>
+    /// <summary>
+    /// 언어 모델이 없으면 <b>그 자리에서 받자고 권한다.</b>
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 예전에는 흐릿한 한 줄로 "'teavel 모델' 로 받으세요" 라고만 하고 넘어갔다.
+    /// 그런데 <b>말을 알아듣는 것이 먼저다</b> — 그게 안 되면 나머지가 다 반쪽이 된다.
+    /// 정확한 낱말을 알아야만 쓸 수 있는 도구는 그 낱말을 모르는 사람에게 없는 것이다.
+    /// </para>
+    /// <para>
+    /// 그래서 등록을 권하듯 여기서도 권한다. 한 번 거절하면 다시 묻지 않는다 —
+    /// 인터넷이 느린 학교도 있고, 나중에 하고 싶을 수도 있다.
+    /// </para>
+    /// </remarks>
+    private async Task OfferModelOnceAsync(CancellationToken ct)
+    {
+        if (_llm is not null) return;
+
+        var marker = Path.Combine(_paths.DataDirectory, "no-auto-model");
+        if (File.Exists(marker))
+        {
+            Ui.Dim("  (언어 모델이 없어 낱말로 알아듣습니다. '모델' 이라고 치시면 받습니다)");
+            return;
+        }
+
+        Console.WriteLine();
+        Ui.Info("아직 말을 알아듣는 언어 모델이 없습니다.");
+        Ui.Plain("""
+              지금은 정해진 낱말만 알아듣습니다. 모델을 받으시면 말투가 달라도 알아듣습니다.
+
+                지금        "엑셀 합치기" 는 되지만 "엑셀들 좀 묶어줘" 는 잘 못 알아듣습니다
+                받은 뒤     둘 다 알아듣습니다
+
+              1GB 쯤 되고 몇 분 걸립니다. 한 번만 받으면 됩니다.
+              받은 뒤에는 인터넷 없이 동작합니다 — 학생 자료가 밖으로 나가지 않습니다.
+        """);
+
+        Console.WriteLine();
+        if (!Ui.Confirm("      지금 받을까요?"))
+        {
+            try { File.WriteAllText(marker, "묻지 않음"); } catch { }
+            Ui.Dim("      나중에 받으시려면 '모델' 이라고 치시면 됩니다.");
+            return;
+        }
+
+        await RunModelAsync(ct).ConfigureAwait(false);
+    }
+
     private void OfferRegistrationOnce()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -632,7 +692,7 @@ public sealed class TeavelSession : IAsyncDisposable
             Ui.Dim($"  현재 폴더: {StartFolder}");
 
         OfferRegistrationOnce();
-        if (_llm is null) Ui.Dim("  (언어 모델이 없어 낱말로 알아듣습니다. 'teavel 모델' 로 받으세요)");
+        await OfferModelOnceAsync(ct).ConfigureAwait(false);
         // 첫 화면에 명령을 늘어놓지 않는다 — 넷을 적으나 열을 적으나 못 읽는 것은 같다.
         // 대신 '모를 때 어디로 가면 되는지' 한 곳만 또렷하게 둔다.
         Ui.Dim("  하고 싶은 일을 그냥 적으셔도 됩니다.  예: 엑셀 다 합쳐줘 · 반 팀 만들어줘");

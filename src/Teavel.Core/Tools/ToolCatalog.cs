@@ -36,6 +36,75 @@ public static class ToolCatalog
     {
         // ─────────────────────────── 엑셀 ───────────────────────────
 
+        // ── Teavel 자신 (도구가 아니라 흐름) ──
+        //
+        // 이것들은 '설치' · '모델' 이라고 정확히 쳐야만 닿았다. 실기에서 이렇게 막혔다.
+        //
+        //   > 실행파일 찾아서 등록해줘   → 엉뚱한 도구 다섯 개를 늘어놓았다
+        //   > 언어모델 다운로드 하자     → 무슨 일인지 알아듣지 못했습니다
+        //
+        // 정확한 낱말을 알아야만 닿는다면, 그 낱말을 모르는 사람에게는 없는 기능이다.
+        new ToolSpec(
+            Id: "teavel.install",
+            Title: "어디서나 teavel 로 실행되게 등록하기",
+            Category: ToolCategory.Setup,
+            Description: "아무 폴더에서나 teavel 만 쳐도 되게 등록하고, 폴더 우클릭 메뉴에 넣습니다. "
+                       + "관리자 권한이 필요 없고 되돌릴 수 있습니다.",
+            Examples: new[]
+            {
+                "실행파일 찾아서 등록해줘",
+                "어디서나 쓸 수 있게 해줘",
+                "teavel 등록해줘",
+                "우클릭 메뉴에 넣어줘",
+            },
+            Parameters: Array.Empty<ToolParam>(),
+            Module: "@flow",
+            Function: "install",
+            Mutating: true)
+        {
+            Aliases = new[] { "설치", "등록", "path 등록", "우클릭 메뉴", "바로 실행" },
+        },
+
+        new ToolSpec(
+            Id: "teavel.uninstall",
+            Title: "등록 풀기",
+            Category: ToolCategory.Setup,
+            Description: "어디서나 실행되게 해 둔 등록과 우클릭 메뉴를 풉니다. "
+                       + "프로그램 파일은 지우지 않습니다.",
+            Examples: new[]
+            {
+                "등록 풀어줘",
+                "우클릭 메뉴 없애줘",
+            },
+            Parameters: Array.Empty<ToolParam>(),
+            Module: "@flow",
+            Function: "uninstall",
+            Mutating: true)
+        {
+            Aliases = new[] { "제거", "등록 해제", "되돌리기" },
+        },
+
+        new ToolSpec(
+            Id: "teavel.model",
+            Title: "말을 알아듣는 언어 모델 내려받기",
+            Category: ToolCategory.Setup,
+            Description: "한 번만 받으면 말투가 달라도 알아듣습니다. 1GB 쯤 되고 몇 분 걸립니다. "
+                       + "받은 뒤에는 인터넷 없이 동작합니다.",
+            Examples: new[]
+            {
+                "언어모델 다운로드 하자",
+                "말 잘 알아듣게 해줘",
+                "모델 받아줘",
+                "인공지능 켜줘",
+            },
+            Parameters: Array.Empty<ToolParam>(),
+            Module: "@flow",
+            Function: "model",
+            Mutating: true)
+        {
+            Aliases = new[] { "모델", "언어 모델", "llm", "다운로드", "내려받기" },
+        },
+
         // ── 학교 전체 (도구가 아니라 흐름) ──
         //
         // Module 이 "@flow" 인 것은 PowerShell 함수가 아니라 CLI 의 한 판을 가리킨다.
