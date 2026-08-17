@@ -182,6 +182,43 @@ public sealed class TeavelSession : IAsyncDisposable
     public Task<int> RunFindTeacherAsync(string? name, CancellationToken ct)
         => M365Flow.FindTeacherAsync(_tools, name, ct);
 
+    /// <summary>
+    /// 첫 낱말이 <paramref name="names"/> 중 하나면 나머지를 돌려준다. 아니면 null.
+    /// </summary>
+    /// <remarks>
+    /// '명단 C:\...\1학년.xlsx' 처럼 뒤에 값이 붙는 명령을 대화 모드에서도 받기 위한 것.
+    /// 값이 없으면 빈 문자열을 돌려준다 — 부르는 쪽이 그때 물어본다.
+    /// </remarks>
+    private static string? Split(string line, params string[] names)
+    {
+        var space = line.IndexOf(' ');
+        var head = space < 0 ? line : line[..space];
+        if (!names.Contains(head, StringComparer.OrdinalIgnoreCase)) return null;
+        return space < 0 ? "" : line[(space + 1)..].Trim().Trim('"');
+    }
+
+    /// <summary>대화 중에 도움말을 보여 준다.</summary>
+    private static void ShowHelp()
+    {
+        Ui.Plain("""
+
+              점검        지금 무엇이 안 돼 있는지 봅니다
+              고침        하나씩 손봅니다
+              목록        할 수 있는 일을 보여 줍니다
+              모델        말을 더 잘 알아듣게 해 줍니다 (한 번만, 1GB쯤)
+              설치        어느 폴더에서나 teavel 로 실행되게 등록합니다
+
+              m365        학교 그룹·Teams 를 살펴보고 정리하고 만듭니다 (관리자용)
+              명단 <파일>  명단 파일을 읽어 정리합니다
+              선생님 <이름> 선생님 계정을 찾습니다
+
+              자가점검     Teavel 자신이 온전한지 확인합니다
+              나가기       끝냅니다
+
+              그 밖에는 하고 싶은 일을 그냥 적으시면 됩니다. 예: 엑셀 다 합쳐줘
+        """);
+    }
+
     /// <summary>도구가 아니라 흐름인 것을 실행한다.</summary>
     private async Task RunFlowAsync(ToolSpec tool, IntentMatch match, CancellationToken ct)
     {
@@ -535,10 +572,27 @@ public sealed class TeavelSession : IAsyncDisposable
 
             if (line is null) return 0;
             if (line.Length == 0) continue;
+            // 명령줄에서 되는 것은 여기서도 다 돼야 한다.
+            //
+            // 포털에서 받으면 exe 파일 하나뿐이라 교사는 그것을 더블클릭한다 —
+            // 그러면 곧장 이 대화 모드로 들어온다. 여기서 '자가점검' 이나 '모델' 을 못 치면
+            // 그 명령들은 사실상 없는 것이나 마찬가지다.
             if (line is "나가기" or "종료" or "exit" or "quit") return 0;
             if (line is "목록" or "list") { RunList(); continue; }
             if (line is "점검" or "check") { await RunCheckAsync(ct).ConfigureAwait(false); continue; }
             if (line is "고침" or "손보기" or "fix") { await RunFixAsync(null, ct).ConfigureAwait(false); continue; }
+            if (line is "자가점검" or "selfcheck") { await RunSelfCheckAsync(ct).ConfigureAwait(false); continue; }
+            if (line is "모델" or "model") { await RunModelAsync(ct).ConfigureAwait(false); continue; }
+            if (line is "설치" or "등록" or "install") { RunRegister(); continue; }
+            if (line is "제거" or "등록해제" or "uninstall") { RunUnregister(); continue; }
+            if (line is "도움말" or "help" or "?") { ShowHelp(); continue; }
+
+            // 뒤에 값이 붙는 것들.
+            if (line is "m365" or "그룹" or "teams") { await RunM365Async(ct).ConfigureAwait(false); continue; }
+            if (Split(line, "명단", "roster") is { } rosterArg)
+            { RosterFlow.Run(rosterArg, AssumeYes); continue; }
+            if (Split(line, "선생님", "교사", "teacher") is { } teacherArg)
+            { await RunFindTeacherAsync(teacherArg, ct).ConfigureAwait(false); continue; }
 
             await HandleUtteranceAsync(line, ct).ConfigureAwait(false);
         }
