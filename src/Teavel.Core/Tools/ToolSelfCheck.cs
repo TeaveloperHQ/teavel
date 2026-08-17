@@ -87,11 +87,44 @@ public static class ToolSelfCheck
                       + $"(스크립트가 받는 것: {string.Join(", ", declared.OrderBy(x => x))})"));
         }
 
+        // BOM 없는 .psm1 은 한국어 Windows 에서 글자가 깨진다.
+        // Windows PowerShell 5.1 은 BOM 이 없으면 UTF-8 이 아니라 시스템 코드 페이지(CP949)로
+        // 읽는다 — 파일은 멀쩡한데 교사 화면의 안내문만 전부 깨져 나온다.
+        // 실기에서 실제로 겪었다(2026-08-17, Teavel.M365.psm1).
+        foreach (var module in ToolCatalog.All.Select(t => t.Module).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var path = Path.Combine(scriptsDirectory, module + ".psm1");
+            if (!File.Exists(path)) continue;
+
+            if (!HasUtf8Bom(path))
+                issues.Add(new SelfCheckIssue(module,
+                    $"{module}.psm1 에 UTF-8 BOM 이 없습니다. "
+                  + "한국어 Windows 에서 안내문이 깨져 나옵니다."));
+        }
+
+        // 래퍼도 같은 이유로 확인한다.
+        var wrapper = Path.Combine(scriptsDirectory, "Invoke-TeavelTool.ps1");
+        if (File.Exists(wrapper) && !HasUtf8Bom(wrapper))
+            issues.Add(new SelfCheckIssue("Invoke-TeavelTool.ps1",
+                "UTF-8 BOM 이 없습니다. 한국어 Windows 에서 글자가 깨집니다."));
+
         // 같은 id 가 두 번 선언되면 Find 가 먼저 것만 돌려주므로 반드시 잡는다.
         foreach (var dup in ToolCatalog.All.GroupBy(t => t.Id, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
             issues.Add(new SelfCheckIssue(dup.Key, $"같은 id 의 도구가 {dup.Count()}개 선언돼 있습니다."));
 
         return issues;
+    }
+
+    /// <summary>파일이 UTF-8 BOM 으로 시작하는지.</summary>
+    private static bool HasUtf8Bom(string path)
+    {
+        try
+        {
+            using var f = File.OpenRead(path);
+            Span<byte> head = stackalloc byte[3];
+            return f.Read(head) == 3 && head[0] == 0xEF && head[1] == 0xBB && head[2] == 0xBF;
+        }
+        catch (IOException) { return false; }
     }
 
     /// <summary>

@@ -21,8 +21,18 @@ function Get-TeavelSystemFacts {
     $p  = Get-ItemProperty -Path $cv -ErrorAction SilentlyContinue
 
     $editionId   = if ($p -and $p.PSObject.Properties['EditionID'])      { [string]$p.EditionID }      else { '' }
-    $productName = if ($p -and $p.PSObject.Properties['ProductName'])    { [string]$p.ProductName }    else { 'Windows' }
     $display     = if ($p -and $p.PSObject.Properties['DisplayVersion']) { [string]$p.DisplayVersion } else { '' }
+    $build       = 0
+    if ($p -and $p.PSObject.Properties['CurrentBuild']) { [void][int]::TryParse([string]$p.CurrentBuild, [ref]$build) }
+
+    # ProductName 을 믿으면 안 된다.
+    # Windows 11 에서도 이 값이 "Windows 10 Pro" 로 남아 있다(마이크로소프트가 안 고쳤다).
+    # 실기 확인: 빌드 26200 · 25H2 · Windows 11 인데 ProductName 은 "Windows 10 Pro".
+    # 빌드 번호가 진실이다 — 22000 이상이면 Windows 11.
+    $rawName = if ($p -and $p.PSObject.Properties['ProductName']) { [string]$p.ProductName } else { 'Windows' }
+    $productName = if ($build -ge 22000 -and $rawName -match 'Windows 10') {
+        $rawName -replace 'Windows 10', 'Windows 11'
+    } else { $rawName }
 
     # EditionID 가 Core 로 시작하면 Home 이다(CoreN, CoreSingleLanguage 등 변종 포함).
     $isHome = $editionId -like 'Core*'
@@ -63,6 +73,7 @@ function Get-TeavelSystemFacts {
         Edition         = $edition
         ProductName     = $productName
         DisplayVersion  = $display
+        Build           = $build
         IsHome          = $isHome
         EditionKnown    = $editionKnown
         CanJoinDevice   = $canJoinDevice

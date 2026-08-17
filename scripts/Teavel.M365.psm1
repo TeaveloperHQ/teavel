@@ -1,4 +1,4 @@
-<#
+﻿<#
     Microsoft 365 — 학교 그룹·Teams 구성.
 
     ■ 왜 Graph 를 기본으로 쓰지 않는가
