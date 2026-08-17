@@ -500,6 +500,82 @@ function New-TeavelM365Group {
 
 <#
 .SYNOPSIS
+    테넌트의 사람들을 훑는다. 누가 교사인지는 여기서 정하지 않는다.
+.DESCRIPTION
+    구성원을 배정하려면 먼저 누가 교사이고 누가 학생인지 알아야 한다.
+    라이선스가 다르다는 것은 알지만, 그 라이선스를 어떻게 읽느냐가 문제였다.
+
+      · Get-MsolUser 는 SKU 이름(STANDARDWOFFPACK_FACULTY)을 그대로 줬지만
+        MSOnline 모듈이 2025년 5월에 퇴역했다.
+      · Graph 는 SKU 를 주지만 관리자 동의 화면이 필요하다 — 우리가 피해 온 것이다.
+      · Get-CsOnlineUser 는 SKU 대신 서비스 플랜 목록(AssignedPlan)을 준다.
+        Teams 모듈이라 동의가 필요 없다.
+
+    그래서 이렇게 한다. SKU 이름을 알아내려 들지 않고, **라이선스 꾸러미가 같은
+    사람끼리 묶기만 한다.** 학교라면 큰 묶음 둘이 나온다 — 학생 수백 명과 교사 수십 명.
+    어느 쪽이 교사인지는 관리자가 보면 안다. 이름 몇 개만 보여 주면 된다.
+
+    이 방식은 SKU 이름이 무엇이든, 학교가 무슨 라이선스를 쓰든 똑같이 동작한다.
+    마이크로소프트가 SKU 이름을 바꿔도 여기는 안 바뀐다.
+
+    한 줄이 이렇게 나간다:
+        USER<tab>UPN<tab>이름<tab>부서<tab>계정종류<tab>라이선스꾸러미
+#>
+function Get-TeavelTenantUser {
+    param(
+        [int] $Limit = 5000
+    )
+
+    Import-Module MicrosoftTeams -ErrorAction Stop
+
+    $users = @(Get-CsOnlineUser -ResultSize $Limit -ErrorAction Stop)
+
+    $d = New-Object System.Collections.Generic.List[string]
+    foreach ($u in $users) {
+        $upn = ''
+        try { $upn = [string]$u.UserPrincipalName } catch { }
+        if (-not $upn) { continue }
+
+        $name = ''
+        try { $name = [string]$u.DisplayName } catch { }
+
+        $dept = ''
+        try { if ($u.PSObject.Properties['Department']) { $dept = [string]$u.Department } } catch { }
+
+        # 라이선스가 없는 계정은 IneligibleUser 로 온다 — 팀에 넣어도 못 쓴다.
+        $kind = ''
+        try { if ($u.PSObject.Properties['AccountType']) { $kind = [string]$u.AccountType } } catch { }
+
+        # AssignedPlan 의 모양은 판마다 달라졌다(XML → JSON). 어느 쪽이든 이름만 뽑아 쓴다.
+        # 못 뽑으면 빈 꾸러미가 되는데, 그러면 그 사람들끼리 한 묶음이 되어 눈에 띈다 —
+        # 조용히 엉뚱한 묶음에 섞이는 것보다 낫다.
+        $caps = New-Object System.Collections.Generic.List[string]
+        try {
+            foreach ($p in @($u.AssignedPlan)) {
+                if (-not $p) { continue }
+                $c = $null
+                if ($p.PSObject.Properties['Capability'])        { $c = $p.Capability }
+                elseif ($p.PSObject.Properties['ServicePlanId']) { $c = $p.ServicePlanId }
+                else                                             { $c = [string]$p }
+
+                # 꺼져 있는 플랜은 빼야 같은 라이선스끼리 같은 꾸러미가 된다.
+                if ($p.PSObject.Properties['CapabilityStatus'] -and
+                    $p.CapabilityStatus -and [string]$p.CapabilityStatus -ne 'Enabled') { continue }
+
+                if ($c) { $caps.Add([string]$c) }
+            }
+        } catch { }
+
+        $bundle = (($caps | Sort-Object -Unique) -join ',')
+
+        $d.Add(("USER`t{0}`t{1}`t{2}`t{3}`t{4}" -f $upn, $name, $dept, $kind, $bundle))
+    }
+
+    New-TeavelResult -Message "사람 $($users.Count)명을 읽었습니다." -Details $d
+}
+
+<#
+.SYNOPSIS
     팀에 선언된 채널을 맞춘다. 없는 것만 만들고, 이미 있으면 건드리지 않는다.
 .DESCRIPTION
     여러 번 돌려도 안전해야 하므로 '만든다' 가 아니라 '맞춘다' 이다.
@@ -680,5 +756,6 @@ function Remove-TeavelM365Group {
 Export-ModuleMember -Function `
     Get-TeavelModuleDirectory, Get-TeavelM365Readiness, Install-TeavelM365Module, `
     Install-TeavelModuleFromGallery, Connect-TeavelM365, `
-    Get-TeavelM365Inventory, New-TeavelM365Group, Sync-TeavelTeamChannel, `
+    Get-TeavelM365Inventory, Get-TeavelTenantUser, `
+    New-TeavelM365Group, Sync-TeavelTeamChannel, `
     Rename-TeavelM365Group, Remove-TeavelM365Group

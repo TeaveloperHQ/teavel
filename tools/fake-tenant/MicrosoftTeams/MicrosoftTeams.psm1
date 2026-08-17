@@ -63,9 +63,67 @@ function New-TeamChannel {
     [pscustomobject]@{ DisplayName = $DisplayName }
 }
 
+<#
+    가짜 사람들. 실제 학교 비율에 맞춘다 — 학생이 교사보다 훨씬 많다.
+    라이선스 꾸러미(AssignedPlan)는 교사·학생이 다르되 SKU 이름은 드러내지 않는다.
+    진짜 Get-CsOnlineUser 도 SKU 이름을 주지 않기 때문이다.
+#>
+$script:FacultyPlan = @('EXCHANGE_S_STANDARD', 'MCOSTANDARD', 'SHAREPOINTSTANDARD_EDU',
+                        'TEAMS1', 'SCHOOL_DATA_SYNC_P1', 'INTUNE_EDU')
+$script:StudentPlan = @('EXCHANGE_S_STANDARD', 'MCOSTANDARD', 'SHAREPOINTSTANDARD_EDU', 'TEAMS1')
+
+function New-FakePerson {
+    param($Upn, $Name, $Dept, $Kind, $Plans)
+    [pscustomobject]@{
+        UserPrincipalName = $Upn
+        DisplayName       = $Name
+        Department        = $Dept
+        AccountType       = $Kind
+        AssignedPlan      = @($Plans | ForEach-Object {
+            [pscustomobject]@{ Capability = $_; CapabilityStatus = 'Enabled' }
+        })
+    }
+}
+
+function Get-CsOnlineUser {
+    param($Identity, $ResultSize, $Filter, $Properties, $AccountType, $ErrorAction)
+
+    $people = New-Object System.Collections.Generic.List[object]
+
+    # 교사 24명
+    $teachers = @('김하늘','이준서','박서연','최민준','정예린','강도윤','조유진','윤시우',
+                  '장서윤','임건우','한지호','오채원','서동현','신아름','권태양','황보람',
+                  '안세진','송민서','류가온','전소율','고은채','문지훈','배수아','남기범')
+    $subjects = @('국어과','수학과','영어과','과학과','사회과','체육과')
+    for ($i = 0; $i -lt $teachers.Count; $i++) {
+        $people.Add((New-FakePerson -Upn ("teacher{0:d2}@school.example.kr" -f ($i+1)) `
+            -Name $teachers[$i] -Dept $subjects[$i % $subjects.Count] -Kind 'User' -Plans $script:FacultyPlan))
+    }
+
+    # 학생 180명 (3학년 x 6반 x 10명)
+    foreach ($grade in 1..3) {
+        foreach ($room in 1..6) {
+            foreach ($no in 1..10) {
+                $sid = '{0}{1:d2}{2:d2}' -f $grade, $room, $no
+                $people.Add((New-FakePerson -Upn "s$sid@school.example.kr" `
+                    -Name "학생$sid" -Dept '' -Kind 'User' -Plans $script:StudentPlan))
+            }
+        }
+    }
+
+    # 라이선스 없는 계정 · 손님 · 자원 계정 — 실제 테넌트에 늘 섞여 있다.
+    $people.Add((New-FakePerson -Upn 'old.teacher@school.example.kr' -Name '퇴직교사' -Dept '' -Kind 'IneligibleUser' -Plans @()))
+    $people.Add((New-FakePerson -Upn 'guest@other.example.com' -Name '외부 강사' -Dept '' -Kind 'Guest' -Plans @()))
+    $people.Add((New-FakePerson -Upn 'room1@school.example.kr' -Name '회의실1' -Dept '' -Kind 'ResourceAccount' -Plans @()))
+
+    if ($Identity) { return @($people | Where-Object { $_.UserPrincipalName -eq $Identity }) }
+    $people.ToArray()
+}
+
 function Add-TeamUser { param($GroupId, $User, $Role, $ErrorAction) }
 function Get-Team { param($ErrorAction) @() }
 function Get-CsTenant { param($ErrorAction) [pscustomobject]@{ DisplayName = '가짜 학교' } }
 
 Export-ModuleMember -Function Connect-MicrosoftTeams, Disconnect-MicrosoftTeams,
-    New-Team, New-TeamChannel, Get-TeamChannel, Add-TeamUser, Get-Team, Get-CsTenant
+    New-Team, New-TeamChannel, Get-TeamChannel, Add-TeamUser, Get-Team, Get-CsTenant,
+    Get-CsOnlineUser

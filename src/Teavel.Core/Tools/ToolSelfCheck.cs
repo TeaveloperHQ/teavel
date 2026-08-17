@@ -109,10 +109,21 @@ public static class ToolSelfCheck
             //    그런데 splatting 은 비어 있어도 조용히 성공한다 — 매개변수 하나 없이 호출된다.
             //    실기에서 겪었다(2026-08-17): 팀 만들기가 이름도 별칭도 없이 호출돼
             //    빈 그룹이 하나 생기고 그다음부터 전부 실패했다. 오류 메시지는 엉뚱한 곳을 가리켰다.
-            foreach (var fn in FindEmptySplats(File.ReadAllText(path)))
+            var source = File.ReadAllText(path);
+
+            foreach (var fn in FindEmptySplats(source))
                 issues.Add(new SelfCheckIssue(name,
                     $"'{fn}' 안에서 @args 로 splatting 합니다. param() 이 있는 함수에서 $args 는 "
                   + "항상 비어 있어, 아무 인자도 넘기지 않은 채 성공한 것처럼 보입니다."));
+
+            // ③ List[object] 를 @() 로 감싸는 것.
+            //    실기에서 겪었다(2026-08-17): 엑셀 시트를 다 읽고 마지막 줄에서
+            //    '인수 형식이 일치하지 않습니다' 로 터졌다. 목록이 비어 있어도 터진다.
+            foreach (var v in FindObjectListWrapping(source))
+                issues.Add(new SelfCheckIssue(name,
+                    $"'${v}' 은(는) List[object] 인데 @() 로 감쌉니다. "
+                  + "PowerShell 이 '인수 형식이 일치하지 않습니다' 로 터집니다. "
+                  + $"${v}.ToArray() 를 쓰세요."));
         }
 
         // 같은 id 가 두 번 선언되면 Find 가 먼저 것만 돌려주므로 반드시 잡는다.
@@ -158,6 +169,41 @@ public static class ToolSelfCheck
             // 주석 안의 @args 까지 잡으면 잔소리가 된다.
             var code = Regex.Replace(block, @"(?m)#.*$", "");
             if (Regex.IsMatch(code, @"@args\b")) yield return name;
+        }
+    }
+
+    /// <summary>
+    /// <c>List[object]</c> 로 만든 변수를 <c>@()</c> 로 감싸는 곳의 변수 이름들.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>@($list)</c> 는 <c>List[object]</c> 일 때만 터진다 —
+    /// <c>인수 형식이 일치하지 않습니다(Argument types do not match)</c>.
+    /// Windows PowerShell 5.1 과 pwsh 7.4 에서 똑같고, <b>목록이 비어 있어도</b> 터진다.
+    /// <c>List[string]</c>·<c>List[int]</c>·<c>List[psobject]</c>·<c>ArrayList</c> 는 멀쩡하다.
+    /// </para>
+    /// <para>
+    /// 이것이 고약한 이유는 <b>일을 다 하고 나서</b> 터지기 때문이다.
+    /// 엑셀 시트를 전부 읽은 뒤 돌려주는 마지막 줄에서 실패해, 화면에는
+    /// 엉뚱한 오류만 남고 원인은 어디에도 보이지 않는다.
+    /// </para>
+    /// </remarks>
+    internal static IEnumerable<string> FindObjectListWrapping(string source)
+    {
+        // 주석 안의 예시까지 잡으면 잔소리가 된다.
+        var code = Regex.Replace(source, @"(?m)#.*$", "");
+
+        var declared = Regex.Matches(code,
+                @"\$(?<name>\w+)\s*=\s*(?:New-Object\s+(?:System\.Collections\.Generic\.)?List\[object\]"
+              + @"|\[System\.Collections\.Generic\.List\[object\]\]::new\(\))",
+                RegexOptions.IgnoreCase)
+            .Select(m => m.Groups["name"].Value)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var name in declared)
+        {
+            if (Regex.IsMatch(code, $@"@\(\s*\${Regex.Escape(name)}\s*\)"))
+                yield return name;
         }
     }
 

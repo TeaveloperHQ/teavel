@@ -174,7 +174,16 @@ function Read-TeavelTable {
             }
             if ($hasValue) { $rows.Add([PSCustomObject]$o) }   # 완전히 빈 행은 버린다
         }
-        return @($rows)
+
+        # @($rows) 로 쓰면 안 된다.
+        #
+        # List[object] 를 @() 로 감싸면 PowerShell 이 '인수 형식이 일치하지 않습니다' 로 터진다.
+        # Windows PowerShell 5.1 과 pwsh 7.4 에서 똑같이 그렇다. 목록이 비어 있어도 터진다.
+        # List[string]·List[int]·List[psobject]·ArrayList 는 멀쩡하고 오직 List[object] 만 그렇다.
+        #
+        # 여기서 터지면 시트를 다 읽고 나서 마지막 줄에 실패한다 — 엑셀 도구가 통째로 못 쓰게 된다.
+        # ToArray() 는 어느 판에서도 안전하다.
+        return $rows.ToArray()
     }
     finally {
         Remove-TeavelComObject $range

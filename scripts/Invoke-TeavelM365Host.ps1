@@ -96,7 +96,8 @@ while ($true) {
     # 이름을 그대로 실행하면 stdin 을 쥔 쪽이 무엇이든 부를 수 있게 된다.
     $allowed = @(
         'Get-TeavelM365Readiness', 'Install-TeavelM365Module', 'Connect-TeavelM365',
-        'Get-TeavelM365Inventory', 'New-TeavelM365Group', 'Sync-TeavelTeamChannel',
+        'Get-TeavelM365Inventory', 'Get-TeavelTenantUser',
+        'New-TeavelM365Group', 'Sync-TeavelTeamChannel',
         'Rename-TeavelM365Group', 'Remove-TeavelM365Group'
     )
     if ($allowed -notcontains $fn) {

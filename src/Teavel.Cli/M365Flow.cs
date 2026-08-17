@@ -62,6 +62,7 @@ public sealed class M365Flow
         if (inventory is null) return 2;
 
         ShowInventory(inventory);
+        await ShowPeopleAsync(host, ct).ConfigureAwait(false);
 
         // ① 정리가 먼저. 여기서 이름을 바꾼 것은 아래 대조에 곧바로 반영돼야 하므로
         //    바뀐 목록을 돌려받는다.
@@ -238,6 +239,65 @@ public sealed class M365Flow
         var line = $"{kind} {members}  {g.DisplayName}";
         if (t.Note.Length > 0) line += $"   ({t.Note})";
         return line;
+    }
+
+    /// <summary>
+    /// 학교에 누가 있는지 보여 준다. 라이선스가 같은 사람끼리 묶어서.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 교사와 학생은 라이선스가 다르지만 그 <b>이름</b>(SKU)을 읽을 방법이 마땅치 않다 —
+    /// Get-MsolUser 는 서버가 닫혔고 Graph 는 동의 화면을 부른다.
+    /// 그래서 이름을 알아내는 대신 <b>같은 라이선스끼리 묶기만 한다.</b>
+    /// 학교라면 큰 묶음 둘이 나오고, 어느 쪽이 교사인지는 이름 몇 개만 보면 사람이 안다.
+    /// </para>
+    /// <para>
+    /// 여기서는 아직 아무것도 배정하지 않는다. 보여 주기만 한다 —
+    /// 누구를 어느 반에 넣을지는 명단이 있어야 정할 수 있다.
+    /// 다만 <b>라이선스 없는 계정</b>은 지금 알려 줄 값어치가 있다.
+    /// 그 계정은 팀에 넣어도 Teams 에 들어오지 못하는데, 관리자는 대개 모르고 있다.
+    /// </para>
+    /// </remarks>
+    private static async Task ShowPeopleAsync(M365Host host, CancellationToken ct)
+    {
+        var res = await host.CallAsync("Get-TeavelTenantUser",
+            timeout: TimeSpan.FromMinutes(10), ct: ct).ConfigureAwait(false);
+
+        // 사람을 못 읽어도 그룹 작업은 할 수 있다. 여기서 멈추지 않는다.
+        if (!res.Ok)
+        {
+            Ui.Dim($"      (사람 목록은 읽지 못했습니다: {res.Message})");
+            return;
+        }
+
+        var people = UserDirectory.Parse(res.Details);
+        if (people.Count == 0) return;
+
+        var clusters = UserDirectory.Cluster(people);
+
+        Console.WriteLine();
+        Ui.Info(UserDirectory.Summarize(clusters, people));
+
+        foreach (var c in clusters.Where(c => !c.Unlicensed && c.Count >= UserDirectory.SmallCluster))
+        {
+            Ui.Plain($"        {c.Count,5}명   {c.Sample()} …");
+            if (c.Departments.Count > 0)
+                Ui.Dim($"                부서: {string.Join(" · ", c.Departments)}");
+        }
+
+        var unlicensed = clusters.Where(c => c.Unlicensed).SelectMany(c => c.People).ToList();
+        if (unlicensed.Count > 0)
+        {
+            Console.WriteLine();
+            Ui.Warn($"라이선스가 없는 계정이 {unlicensed.Count}개 있습니다. 팀에 넣어도 들어오지 못합니다.");
+            foreach (var u in unlicensed.Take(10))
+                Ui.Plain($"        {u.DisplayName}   {u.Upn}");
+            if (unlicensed.Count > 10) Ui.Dim($"        … 그 밖에 {unlicensed.Count - 10}개");
+        }
+
+        Console.WriteLine();
+        Ui.Dim("      라이선스가 같은 사람끼리 묶은 것입니다. 대개 큰 쪽이 학생, 작은 쪽이 교사입니다.");
+        Ui.Dim("      누구를 어느 반에 넣을지는 명단이 있어야 정할 수 있어, 여기서는 보여 주기만 합니다.");
     }
 
     // ──────────────────────────── 정리 ────────────────────────────

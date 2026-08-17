@@ -132,7 +132,8 @@ function Merge-Workbook {
 
     if ($merged.Count -eq 0) { throw '합칠 행이 하나도 없습니다. 시트 번호와 머리글 행을 확인해 주세요.' }
 
-    Write-TeavelTable -Rows @($merged) -Path $outFull -Columns @($columns)
+    # @($merged) 로 감싸면 터진다 — List[object] 의 함정이다(Teavel.Common.psm1 의 주석 참고).
+    Write-TeavelTable -Rows $merged.ToArray() -Path $outFull -Columns $columns.ToArray()
 
     if ($skipped.Count -gt 0) {
         $details.Add('')
