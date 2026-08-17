@@ -15,7 +15,7 @@ namespace Teavel.Cli;
 /// </summary>
 public static class RosterFlow
 {
-    public static int Run(string? path)
+    public static int Run(string? path, bool assumeYes = false)
     {
         Ui.Title("명단 읽기");
 
@@ -72,21 +72,189 @@ public static class RosterFlow
         }
 
         WarnRaggedRows(table, map);
-        ShowSample(table, map);
+
+        var result = RosterExtractor.Extract(table, map);
+        ShowRows(result);
+
+        if (result.Rows.Count == 0)
+        {
+            Ui.Warn("명단으로 볼 줄이 없습니다.");
+            return 1;
+        }
+
+        return ChooseWhatToDo(result, path, assumeYes);
+    }
+
+    /// <summary>
+    /// 여기가 갈림길이다 — <b>계정을 한꺼번에 만들 것인가, 이미 있는 계정을 쓸 것인가.</b>
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 학생 계정은 두 갈래로 생긴다. 학생이 스스로 만들거나, 관리자가 한꺼번에 만들거나.
+    /// 이미 있는 계정을 쓰는 자리에서 또 만들면 같은 사람이 둘이 되고,
+    /// 없는 계정에 배정하려 들면 한 줄도 못 넣는다. 그래서 반드시 사람이 정해야 한다.
+    /// </para>
+    /// <para>
+    /// 계정 만들기는 Exchange·Teams 모듈로 못 한다. Graph 아니면 관리 센터인데
+    /// Graph 는 동의 화면을 부르므로, <b>관리 센터에 올릴 파일을 만들어 주는 쪽</b>을 골랐다.
+    /// 학생 개인 정보가 우리 코드를 거쳐 밖으로 나가지 않는다는 점도 크다.
+    /// </para>
+    /// </remarks>
+    private static int ChooseWhatToDo(RosterResult result, string sourcePath, bool assumeYes)
+    {
+        var usable = result.Good.Where(r => r.Upn.Length > 0).ToList();
 
         Console.WriteLine();
-        if (map.CanAssign)
+        Ui.Title("이 명단으로 무엇을 할까요");
+        Ui.Plain("""
+              [1] 계정을 한꺼번에 만들기
+                  아직 학생 계정이 없을 때. 관리 센터에 올릴 파일을 만들어 드립니다.
+
+              [2] 이미 있는 계정을 반에 넣기
+                  학생들이 이미 아이디를 받았을 때.
+
+              [3] 여기까지만 — 읽은 내용만 확인
+        """);
+
+        if (assumeYes)
         {
-            Ui.Ok("이 명단으로 팀에 넣을 수 있습니다.");
-        }
-        else
-        {
-            Ui.Warn("ID 열이 없어 팀에 넣지 못합니다.");
-            Ui.Dim("      로그인 아이디(메일 주소)가 있는 열이 필요합니다.");
-            Ui.Dim("      학번으로 아이디를 만드는 규칙이 있다면 알려 주세요 — 그 규칙으로 만들어 드릴 수 있습니다.");
+            Ui.Info("자동 모드에서는 여기서 멈춥니다. 어느 쪽인지는 사람이 정해야 합니다.");
+            return 0;
         }
 
-        return map.CanAssign ? 0 : 1;
+        var pick = (Ui.Ask("      고르세요 [3] ") ?? "3").Trim();
+        if (pick.Length == 0) pick = "3";
+
+        return pick switch
+        {
+            "1" => MakeBulkCsv(usable, sourcePath),
+            "2" => ExplainAssign(usable),
+            _   => 0,
+        };
+    }
+
+    private static int MakeBulkCsv(IReadOnlyList<RosterRow> rows, string sourcePath)
+    {
+        Ui.Title("한꺼번에 만들 파일");
+
+        if (rows.Count == 0)
+        {
+            Ui.Error("아이디가 있는 줄이 하나도 없어 만들 수 없습니다.");
+            return 1;
+        }
+
+        // 열 이름은 짐작하지 않는다. 관리 센터 견본을 주시면 그것을 그대로 쓴다 —
+        // 문서가 '견본과 정확히 같아야 한다' 고 못 박고 있고, 틀리면 통째로 거부당한다.
+        Console.WriteLine();
+        Ui.Dim("      관리 센터에서 내려받은 견본 파일이 있으면 그 열 이름을 그대로 쓰겠습니다.");
+        Ui.Dim("      (관리 센터 → 사용자 → 활성 사용자 → 여러 사용자 추가 → 샘플 다운로드)");
+        Ui.Dim("      없으면 그냥 Enter — 문서에 적힌 이름으로 만듭니다.");
+        var template = (Ui.Ask("      견본 파일 경로: ") ?? "").Trim().Trim('"');
+
+        if (template.Length > 0 && !File.Exists(template))
+        {
+            Ui.Warn($"그런 파일이 없습니다: {template}");
+            Ui.Dim("      문서에 적힌 이름으로 만들겠습니다.");
+            template = "";
+        }
+
+        var (text, headers, note) = BulkUserCsv.Build(rows, template.Length > 0 ? template : null);
+
+        var outPath = Path.Combine(
+            Path.GetDirectoryName(Path.GetFullPath(sourcePath)) ?? ".",
+            Path.GetFileNameWithoutExtension(sourcePath) + "-계정만들기.csv");
+
+        try { BulkUserCsv.Write(outPath, text); }
+        catch (Exception ex) { Ui.Error($"파일을 쓰지 못했습니다: {ex.Message}"); return 2; }
+
+        Console.WriteLine();
+        Ui.Ok($"{rows.Count}명 분을 만들었습니다.");
+        Ui.Plain($"        {outPath}");
+        Ui.Dim($"      {note}");
+        Ui.Dim($"      열: {string.Join(", ", headers.Take(5))}{(headers.Count > 5 ? " …" : "")}");
+
+        Console.WriteLine();
+        Ui.Plain("""
+              올리는 순서
+
+              ① 관리 센터(admin.microsoft.com)를 엽니다
+              ② 왼쪽에서 [사용자] → [활성 사용자]
+              ③ 위쪽 [여러 사용자 추가] 를 누릅니다
+              ④ 방금 만든 파일을 올립니다
+              ⑤ 라이선스를 고르고 [추가]
+
+              비밀번호는 관리 센터가 만들어 줍니다. 그 목록을 꼭 내려받아 두세요 —
+              그 화면을 닫으면 다시 볼 수 없습니다.
+        """);
+
+        Console.WriteLine();
+        Ui.Dim("      계정이 다 만들어진 뒤에 'teavel m365' 로 반에 넣으시면 됩니다.");
+        return 0;
+    }
+
+    private static int ExplainAssign(IReadOnlyList<RosterRow> rows)
+    {
+        Ui.Title("반에 넣기");
+        Ui.Info($"넣을 수 있는 사람: {rows.Count}명");
+
+        var byClass = rows
+            .Where(r => r.Grade.Length > 0 && r.ClassNo.Length > 0)
+            .GroupBy(r => $"{r.Grade}학년 {r.ClassNo}반")
+            .OrderBy(g => g.Key, StringComparer.CurrentCulture)
+            .ToList();
+
+        foreach (var g in byClass) Ui.Plain($"        {g.Key}   {g.Count()}명");
+
+        if (byClass.Count == 0)
+            Ui.Warn("학년·반을 못 찾아 어느 반에 넣을지 알 수 없습니다.");
+
+        Console.WriteLine();
+        Ui.Warn("반에 실제로 넣는 것은 아직 만들지 않았습니다.");
+        Ui.Dim("      팀을 먼저 만들어야 하고(teavel m365), 그다음 이 명단으로 넣게 됩니다.");
+        return 0;
+    }
+
+    /// <summary>뽑아 낸 줄들을 보여 준다. 만들어 채운 자리와 걸리는 줄을 반드시 짚는다.</summary>
+    private static void ShowRows(RosterResult result)
+    {
+        Console.WriteLine();
+        Ui.Info($"명단 {result.Rows.Count}줄을 읽었습니다.");
+
+        if (result.MadeCounts.Count > 0)
+        {
+            // 무엇을 무엇으로 만들었는지 그대로 적는다. 자리 이름만 말하면
+            // '학년·반·번호를 이어 붙였다' 는 문장이 그 열이 없는 파일에도 나가 거짓말이 된다.
+            foreach (var (how, n) in result.MadeCounts.OrderByDescending(kv => kv.Value))
+                Ui.Dim($"      {how} 만든 줄이 {n}개 있습니다(파일에 없던 값입니다).");
+        }
+
+        Console.WriteLine();
+        Ui.Dim("      학년  반   번호  학번      이름      표시이름          ID");
+        foreach (var r in result.Rows.Take(5))
+        {
+            Ui.Plain($"        {Pad(r.Grade, 5)} {Pad(r.ClassNo, 4)} {Pad(r.Number, 5)} "
+                   + $"{Pad(r.StudentId, 9)} {Pad(r.Name, 9)} {Pad(r.DisplayName, 17)} {r.Upn}");
+        }
+        if (result.Rows.Count > 5) Ui.Dim($"        … 그 밖에 {result.Rows.Count - 5}줄");
+
+        var dups = RosterExtractor.FindDuplicateUpns(result.Rows);
+        if (dups.Count > 0)
+        {
+            Console.WriteLine();
+            Ui.Error($"같은 아이디가 두 번 이상 나옵니다 ({dups.Count}개). 이대로는 만들 수 없습니다.");
+            foreach (var d in dups.Take(5)) Ui.Plain($"        {d}");
+        }
+
+        var bad = result.Bad.ToList();
+        if (bad.Count > 0)
+        {
+            Console.WriteLine();
+            Ui.Warn($"쓸 수 없는 줄이 {bad.Count}개 있습니다.");
+            foreach (var r in bad.Take(8))
+                Ui.Plain($"        {r.Line}번째 줄 — {string.Join(" · ", r.Problems)}"
+                       + (r.Name.Length > 0 ? $"  ({r.Name})" : ""));
+            if (bad.Count > 8) Ui.Dim($"        … 그 밖에 {bad.Count - 8}줄");
+        }
     }
 
     /// <summary>

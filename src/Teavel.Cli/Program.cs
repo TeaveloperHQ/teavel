@@ -58,7 +58,7 @@ try
         "제거" or "등록해제" or "uninstall" => session.RunUnregister(),
         "자가점검" or "selfcheck"     => await session.RunSelfCheckAsync(cancel.Token),
         "m365" or "그룹" or "teams"   => await session.RunM365Async(cancel.Token),
-        "명단" or "roster"            => RosterFlow.Run(argument),
+        "명단" or "roster"            => RosterFlow.Run(argument, assumeYes),
         "도움말" or "help" or "--help" => Run(PrintHelp),
         _                             => await session.HandleOneShotAsync(string.Join(' ', positional), cancel.Token),
     };

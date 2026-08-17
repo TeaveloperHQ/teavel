@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 
 namespace Teavel.Roster;
 
@@ -25,6 +25,12 @@ public enum RosterField
 
     /// <summary>이름.</summary>
     Name,
+
+    /// <summary>
+    /// 표시 이름 — Teams 에서 보이는 이름. 학번+이름 꼴이다(예: 10101홍길동).
+    /// 열이 없으면 학번과 이름으로 만들어 채운다.
+    /// </summary>
+    DisplayName,
 
     /// <summary>로그인 아이디. 팀에 넣을 때 쓰는 값이라 이것이 없으면 배정을 못 한다.</summary>
     Upn,
@@ -83,8 +89,17 @@ public static class RosterSchema
 
         new FieldRule(RosterField.Name, "이름",
             Aliases: new[] { "이름", "성명", "학생명", "학생이름", "성함", "name", "학생" },
-            Never:   new[] { "교사명", "담당교사", "교사", "학부모", "보호자", "학교명", "과목명", "반명", "학급명" },
+            // '표시이름' 안에도 '이름' 이 있다. 그쪽은 따로 자리가 있으므로 여기서 잘라 낸다.
+            Never:   new[] { "표시", "display", "교사명", "담당교사", "교사", "학부모", "보호자",
+                             "학교명", "과목명", "반명", "학급명", "파일명" },
             Looks:   v => Regex.IsMatch(v.Trim(), @"^[가-힣]{2,5}$")),
+
+        new FieldRule(RosterField.DisplayName, "표시이름",
+            Aliases: new[] { "표시이름", "표시명", "displayname", "display", "화면이름",
+                             "teams이름", "표시되는이름", "계정표시이름" },
+            Never:   new[] { "파일", "교사" },
+            // 학번+이름 꼴이면 그것이 표시 이름이다 — 아주 또렷한 표시라 이름만으로 못 찾아도 잡힌다.
+            Looks:   v => Regex.IsMatch(v.Trim(), @"^\d{4,7}[가-힣]{2,5}$")),
 
         new FieldRule(RosterField.Upn, "ID",
             Aliases: new[] { "id", "아이디", "계정", "메일", "이메일", "email", "mail", "upn",
