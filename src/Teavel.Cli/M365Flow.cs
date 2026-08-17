@@ -1,4 +1,4 @@
-using Teavel.M365;
+﻿using Teavel.M365;
 using Teavel.Tools;
 
 namespace Teavel.Cli;
@@ -173,7 +173,7 @@ public sealed class M365Flow
     /// PowerShell 이 낸 재고 줄들을 읽는다.
     /// </summary>
     /// <remarks>
-    /// 한 줄이 <c>GROUP\t이름\t별칭\t메일\t팀여부\t인원\t만든날\t공개범위</c> 꼴이다.
+    /// 한 줄이 <c>GROUP\t이름\t별칭\t메일\t팀여부\t인원\t만든날\t공개범위\t그룹id</c> 꼴이다.
     /// 이름에 탭이 들어갈 일은 없으므로 탭으로 가른다.
     /// 모양이 다른 줄은 <b>버리지 않고 넘어간다</b> — 한 줄 때문에 재고 전체를
     /// 못 보게 되면 관리자는 아무것도 할 수 없다.
@@ -191,10 +191,11 @@ public sealed class M365Flow
             var members = f.Length > 5 && int.TryParse(f[5], out var m) ? m : -1;
             var created = f.Length > 6 ? f[6] : "";
             var privacy = f.Length > 7 ? f[7] : "";
+            var groupId = f.Length > 8 ? f[8] : "";
 
             groups.Add(new ExistingGroup(
                 DisplayName: f[1], MailNickname: f[2], IsTeam: isTeam,
-                MemberCount: members, Created: created, Origin: privacy));
+                MemberCount: members, Created: created, Origin: privacy, GroupId: groupId));
         }
 
         return groups;
@@ -371,6 +372,12 @@ public sealed class M365Flow
                 Ui.Plain($"        {c.Declared.DisplayName}   ({c.Reason})");
         }
 
+        // 이미 있는 팀에도 선언한 채널이 다 있어야 한다.
+        // 만들 것이 없을 때도 반드시 해야 한다 — 팀은 다 만들어졌는데 채널에서 끊긴 실행을
+        // 다시 돌리면 여기가 유일한 복구 지점이다. 이것을 만들기 뒤에만 두었더니
+        // "만들 것이 없습니다" 로 먼저 나가면서 영영 채워지지 않았다.
+        await SyncExistingChannelsAsync(host, plan, ct).ConfigureAwait(false);
+
         if (toCreate.Count == 0)
         {
             Console.WriteLine();
@@ -381,7 +388,10 @@ public sealed class M365Flow
         Console.WriteLine();
         Ui.Dim($"      다음 {toCreate.Count}개를 만듭니다.");
         foreach (var p in toCreate)
-            Ui.Plain($"        {KindName(p.Declared.Kind)}  {p.Declared.DisplayName}   [{p.Declared.MailNickname}]");
+        {
+            var ch = p.Declared.Channels.Count > 0 ? $"  + 채널 {p.Declared.Channels.Count}개" : "";
+            Ui.Plain($"        {KindName(p.Declared.Kind)}  {p.Declared.DisplayName}   [{p.Declared.MailNickname}]{ch}");
+        }
 
         Console.WriteLine();
         if (!_assumeYes && !Ui.Confirm("      만들까요?"))
@@ -407,9 +417,23 @@ public sealed class M365Flow
                 ["Visibility"] = d.Visibility,
             }, timeout: TimeSpan.FromMinutes(5), ct: ct).ConfigureAwait(false);
 
-            if (r.Ok) { Ui.Ok(r.Message); made++; }
-            else { Ui.Error($"{d.DisplayName} — {r.Message}"); failed.Add(d.DisplayName); }
+            if (!r.Ok)
+            {
+                Ui.Error($"{d.DisplayName} — {r.Message}");
+                failed.Add(d.DisplayName);
+                continue;
+            }
+
+            Ui.Ok(r.Message);
+            made++;
+
+            // 팀을 만든 직후에 채널을 붙인다. 만들기 결과에 실려 온 id 로만 갈 수 있다 —
+            // 방금 만든 것은 재고에 아직 없다.
+            if (d.Channels.Count > 0 && ExtractGroupId(r.Details) is { Length: > 0 } gid)
+                await SyncChannelsAsync(host, gid, d, ct).ConfigureAwait(false);
         }
+
+
 
         Console.WriteLine();
         Ui.Info($"{made}개를 만들었습니다.");
@@ -419,9 +443,110 @@ public sealed class M365Flow
             Ui.Dim("      다시 실행하면 만들어진 것은 건너뛰고 못 만든 것만 다시 시도합니다.");
         }
 
-        Console.WriteLine();
-        Ui.Dim("      Teams 와 아웃룩에 보이기까지 몇 분 걸릴 수 있습니다.");
+        if (made > 0) ShowActivationNotice();
+
         return failed.Count == 0 ? 0 : 1;
+    }
+
+    /// <summary>
+    /// 이미 있는 팀들의 채널을 선언대로 맞춘다.
+    /// </summary>
+    /// <remarks>
+    /// 채널이 이미 다 있으면 아무 말도 하지 않는다 — 팀이 스무 개면 스무 줄이
+    /// "이미 다 있습니다" 로 채워져 정작 봐야 할 줄이 묻힌다.
+    /// </remarks>
+    private static async Task SyncExistingChannelsAsync(
+        M365Host host, IReadOnlyList<PlanItem> plan, CancellationToken ct)
+    {
+        var targets = plan.Where(p => p.Action == PlanAction.Skip
+                                   && p.Declared.Channels.Count > 0
+                                   && p.Existing is { IsTeam: true, GroupId.Length: > 0 }).ToList();
+        if (targets.Count == 0) return;
+
+        var added = 0;
+        foreach (var p in targets)
+        {
+            var r = await host.CallAsync("Sync-TeavelTeamChannel", new Dictionary<string, object?>
+            {
+                ["GroupId"] = p.Existing!.GroupId,
+                ["Channels"] = p.Declared.Channels,
+            }, timeout: TimeSpan.FromMinutes(5), ct: ct).ConfigureAwait(false);
+
+            if (!r.Ok)
+            {
+                Ui.Warn($"      {p.Declared.DisplayName} 의 채널 — {r.Message}");
+                continue;
+            }
+
+            // 이미 다 있으면 조용히 넘어간다. 모자라서 채운 것만 말한다.
+            if (r.Message.Contains("만들었습니다", StringComparison.Ordinal))
+            {
+                Console.WriteLine();
+                Ui.Ok($"{p.Declared.DisplayName} — {r.Message}");
+                added++;
+            }
+        }
+
+        if (added > 0)
+            Ui.Dim($"      이미 있던 팀 {added}개에 모자란 채널을 채웠습니다.");
+    }
+
+    /// <summary>팀 하나의 채널을 선언대로 맞춘다. 실패해도 다음 팀으로 넘어간다.</summary>
+    private static async Task SyncChannelsAsync(
+        M365Host host, string groupId, DeclaredGroup d, CancellationToken ct)
+    {
+        var r = await host.CallAsync("Sync-TeavelTeamChannel", new Dictionary<string, object?>
+        {
+            ["GroupId"] = groupId,
+            ["Channels"] = d.Channels,
+        }, timeout: TimeSpan.FromMinutes(5), ct: ct).ConfigureAwait(false);
+
+        // 채널을 못 만들어도 팀은 이미 있다. 여기서 멈추면 나머지 팀이 통째로 밀린다 —
+        // 다시 돌리면 모자란 채널만 채워지므로 말만 하고 넘어간다.
+        if (r.Ok) Ui.Dim($"        └ {d.DisplayName}: {r.Message}");
+        else Ui.Warn($"      {d.DisplayName} 의 채널 — {r.Message}");
+    }
+
+    /// <summary>만들기 결과에 실려 온 그룹 id. 없으면 빈 문자열.</summary>
+    private static string ExtractGroupId(IEnumerable<string> details)
+    {
+        foreach (var line in details)
+        {
+            if (line.StartsWith("GROUPID\t", StringComparison.Ordinal))
+                return line["GROUPID\t".Length..].Trim();
+        }
+        return "";
+    }
+
+    /// <summary>
+    /// 만들고 나서 반드시 해야 할 것을 알린다.
+    /// </summary>
+    /// <remarks>
+    /// PowerShell 로 만든 팀은 <b>활성화하기 전까지 학생에게 보이지 않고</b>,
+    /// 채널도 기본이 접힌 상태다. 이것을 말하지 않으면 관리자는 다 됐다고 생각하는데
+    /// 선생님들은 "아무것도 안 보인다" 고 한다 — 만든 팀 수만큼 문의가 온다.
+    /// </remarks>
+    private static void ShowActivationNotice()
+    {
+        Console.WriteLine();
+        Ui.Warn("아직 한 가지가 남았습니다. 이것을 안 하면 학생에게 보이지 않습니다.");
+        // 여는 따옴표 아래 줄들의 들여쓰기는 닫는 따옴표 위치를 기준으로 깎인다.
+        // 화면에 여백을 남기려면 닫는 자리보다 더 들여써야 한다.
+        Ui.Plain("""
+              ① 팀 활성화
+                 PowerShell 로 만든 팀은 잠자는 상태입니다.
+                 담당 선생님이 Teams 앱에서 그 팀을 한 번 열고 [활성화] 를 누르면
+                 그때부터 학생에게 보입니다.
+
+              ② 채널 표시
+                 새로 만든 채널은 접혀 있습니다.
+                 채널 이름 옆 [...] → [표시] 를 누르면 목록에 나옵니다.
+
+              둘 다 담당 선생님이 각자 하시는 일입니다.
+              만들었다고 알리실 때 이 두 가지를 함께 알려 주세요.
+        """);
+        Console.WriteLine();
+        Ui.Dim("      Teams 와 아웃룩에 반영되기까지 몇 분 걸릴 수 있습니다.");
     }
 
     private static string KindName(GroupKind k) => k switch

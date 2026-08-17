@@ -24,10 +24,43 @@ function New-Team {
     $null = New-UnifiedGroup -DisplayName $DisplayName -Alias $MailNickName -AccessType $Visibility
     Set-FakeTeamFlag -Alias $MailNickName
 
+    # 재고가 주는 id 와 같아야 한다. 무작위로 주면 채널이 엉뚱한 id 아래 쌓인다.
     [pscustomobject]@{
-        GroupId     = [guid]::NewGuid().ToString()
+        GroupId     = (Get-FakeGroupId -Alias $MailNickName)
         DisplayName = $DisplayName
     }
+}
+
+# 채널은 팀별로 따로 담아 둔다. 진짜도 팀을 만들면 '일반' 이 저절로 생긴다.
+# 채널도 실행 사이에 남겨야 '여러 번 돌려도 안전한가' 를 제대로 볼 수 있다.
+$script:ChannelStore = if ($env:TEAVEL_FAKE_STORE) { "$env:TEAVEL_FAKE_STORE.channels" } else { $null }
+$script:Channels = @{}
+if ($script:ChannelStore -and (Test-Path $script:ChannelStore)) {
+    $loaded = Get-Content $script:ChannelStore -Raw | ConvertFrom-Json
+    foreach ($p in $loaded.PSObject.Properties) { $script:Channels[$p.Name] = @($p.Value) }
+}
+
+function Save-FakeChannels {
+    if ($script:ChannelStore) {
+        $script:Channels | ConvertTo-Json -Depth 5 | Set-Content -Path $script:ChannelStore
+    }
+}
+
+function Get-TeamChannel {
+    param($GroupId, $ErrorAction)
+    if (-not $script:Channels.ContainsKey($GroupId)) { $script:Channels[$GroupId] = @('일반') }
+    @($script:Channels[$GroupId] | ForEach-Object { [pscustomobject]@{ DisplayName = $_ } })
+}
+
+function New-TeamChannel {
+    param($GroupId, $DisplayName, $MembershipType, $ErrorAction)
+    if (-not $script:Channels.ContainsKey($GroupId)) { $script:Channels[$GroupId] = @('일반') }
+    if ($script:Channels[$GroupId] -contains $DisplayName) {
+        throw "이미 있는 채널입니다: $DisplayName"
+    }
+    $script:Channels[$GroupId] += $DisplayName
+    Save-FakeChannels
+    [pscustomobject]@{ DisplayName = $DisplayName }
 }
 
 function Add-TeamUser { param($GroupId, $User, $Role, $ErrorAction) }
@@ -35,4 +68,4 @@ function Get-Team { param($ErrorAction) @() }
 function Get-CsTenant { param($ErrorAction) [pscustomobject]@{ DisplayName = '가짜 학교' } }
 
 Export-ModuleMember -Function Connect-MicrosoftTeams, Disconnect-MicrosoftTeams,
-    New-Team, Add-TeamUser, Get-Team, Get-CsTenant
+    New-Team, New-TeamChannel, Get-TeamChannel, Add-TeamUser, Get-Team, Get-CsTenant

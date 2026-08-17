@@ -1,4 +1,4 @@
-namespace Teavel.M365;
+﻿namespace Teavel.M365;
 
 /// <summary>테넌트에 지금 있는 그룹 하나.</summary>
 /// <param name="DisplayName">
@@ -10,13 +10,18 @@ namespace Teavel.M365;
 /// <param name="MemberCount">구성원 수. 모르면 -1.</param>
 /// <param name="Created">만든 날(yyyy-MM-dd). 모르면 빈 문자열.</param>
 /// <param name="Origin">어디서 왔는지 짐작할 단서. 비어 있을 수 있다 — 판단에 쓰지 않는다.</param>
+/// <param name="GroupId">
+/// 테넌트가 쓰는 id. 채널을 손대려면 이것이 있어야 한다(이름으로는 안 된다).
+/// 모르면 빈 문자열 — 대조에는 쓰지 않으므로 없어도 판단은 그대로다.
+/// </param>
 public sealed record ExistingGroup(
     string DisplayName,
     string MailNickname,
     bool IsTeam,
     int MemberCount = -1,
     string Created = "",
-    string Origin = "");
+    string Origin = "",
+    string GroupId = "");
 
 /// <summary>대조 결과 항목 하나가 어떻게 될지.</summary>
 public enum PlanAction

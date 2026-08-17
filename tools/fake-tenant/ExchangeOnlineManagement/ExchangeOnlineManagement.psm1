@@ -66,6 +66,20 @@ function Save-FakeStore {
 }
 
 <#
+    별칭에서 그룹 id 를 만든다.
+
+    진짜 테넌트는 만들 때 id 를 정해 주지만, 가짜에서는 무작위로 주면
+    Get-UnifiedGroup 이 주는 id 와 New-Team 이 주는 id 가 달라진다.
+    그러면 채널이 엉뚱한 id 아래 쌓여, 실은 안 되는 것이 되는 것처럼 보인다.
+    실제로 그렇게 한 번 속았다.
+#>
+function Get-FakeGroupId {
+    param([string] $Alias)
+    ([guid]::new([System.Security.Cryptography.MD5]::Create().ComputeHash(
+        [Text.Encoding]::UTF8.GetBytes($Alias)))).ToString()
+}
+
+<#
     진짜 Get-UnifiedGroup 이 내주는 모양 그대로 만든다.
     Teavel 이 읽는 속성만 담는다 — 실제 테넌트에서 이것들이 온다는 것은 확인했다.
 #>
@@ -79,6 +93,8 @@ function New-FakeRow {
         GroupMemberCount            = $Row.Members
         WhenCreated                 = [datetime]$Row.Created
         AccessType                  = $Row.Access
+        # 채널을 손대려면 이 id 가 있어야 한다.
+        ExternalDirectoryObjectId   = (Get-FakeGroupId -Alias ([string]$Row.Alias))
     }
 }
 
@@ -160,4 +176,4 @@ function Set-FakeTeamFlag {
 
 Export-ModuleMember -Function Connect-ExchangeOnline, Disconnect-ExchangeOnline,
     Get-UnifiedGroup, New-UnifiedGroup, Set-UnifiedGroup, Remove-UnifiedGroup,
-    Add-UnifiedGroupLinks, Set-FakeTeamFlag
+    Add-UnifiedGroupLinks, Set-FakeTeamFlag, Get-FakeGroupId

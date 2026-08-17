@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
@@ -25,6 +25,10 @@ public enum GroupKind
 /// <param name="Description">설명.</param>
 /// <param name="Template">team 일 때 standard · educationClass · educationStaff.</param>
 /// <param name="Visibility">private · public.</param>
+/// <param name="Channels">
+/// 팀 안에 둘 채널 이름들. team 이 아니면 비어 있다.
+/// '일반'(General)은 팀을 만들면 저절로 생기므로 여기 적지 않는다.
+/// </param>
 public sealed record DeclaredGroup(
     string Id,
     GroupKind Kind,
@@ -32,7 +36,8 @@ public sealed record DeclaredGroup(
     string MailNickname,
     string Description,
     string Template,
-    string Visibility);
+    string Visibility,
+    IReadOnlyList<string> Channels);
 
 /// <summary>선언을 읽다 만난 문제 하나.</summary>
 /// <param name="Where">어느 선언에서 났는지.</param>
@@ -200,6 +205,41 @@ public sealed class SchoolTree
                 continue;
             }
 
+            // 채널 이름에도 {학년}·{반} 을 쓸 수 있다 — '3학년 4반 알림' 같은 것.
+            var channels = new List<string>();
+            foreach (var raw in d.Channels ?? new List<string>())
+            {
+                var ch = Substitute(raw ?? "", values).Trim();
+                if (ch.Length == 0) continue;
+
+                // '일반'(General)은 팀을 만들면 저절로 생긴다. 또 만들려 하면 실패하므로 걸러 낸다.
+                if (ch is "일반" or "General" || ch.Equals("general", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (Placeholder.IsMatch(ch))
+                {
+                    problems.Add(new TreeProblem(where,
+                        $"채널 '{ch}' 에 채우지 못한 자리가 있습니다. generate 에 그 이름을 넣어 주세요."));
+                    continue;
+                }
+
+                // 한 팀 안에서 채널 이름이 겹치면 두 번째부터 만들다 실패한다.
+                if (channels.Contains(ch, StringComparer.OrdinalIgnoreCase))
+                {
+                    problems.Add(new TreeProblem(where, $"채널 '{ch}' 이(가) 두 번 적혀 있습니다."));
+                    continue;
+                }
+
+                channels.Add(ch);
+            }
+
+            if (channels.Count > 0 && kind != GroupKind.Team)
+            {
+                problems.Add(new TreeProblem(where,
+                    "채널은 team 에만 둘 수 있습니다. kind 를 team 으로 바꾸거나 channels 를 지워 주세요."));
+                continue;
+            }
+
             into.Add(new DeclaredGroup(
                 Id: d.Id ?? "",
                 Kind: kind,
@@ -207,7 +247,8 @@ public sealed class SchoolTree
                 MailNickname: nick,
                 Description: desc,
                 Template: string.IsNullOrWhiteSpace(d.Template) ? "standard" : d.Template!,
-                Visibility: string.IsNullOrWhiteSpace(d.Visibility) ? "private" : d.Visibility!));
+                Visibility: string.IsNullOrWhiteSpace(d.Visibility) ? "private" : d.Visibility!,
+                Channels: channels));
         }
     }
 
@@ -282,5 +323,6 @@ public sealed class SchoolTree
         public string? Template { get; set; }
         public string? Visibility { get; set; }
         public Dictionary<string, List<JsonElement>>? Generate { get; set; }
+        public List<string>? Channels { get; set; }
     }
 }

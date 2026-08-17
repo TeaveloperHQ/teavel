@@ -387,8 +387,12 @@ function Get-TeavelM365Inventory {
         $privacy = ''
         try { $privacy = [string]$g.AccessType } catch { }
 
-        $d.Add(("GROUP`t{0}`t{1}`t{2}`t{3}`t{4}`t{5}`t{6}" -f `
-            $g.DisplayName, $g.Alias, $g.PrimarySmtpAddress, $isTeam, $members, $created, $privacy))
+        # 채널을 손대려면 GroupId 가 있어야 한다. Get-UnifiedGroup 은 이 이름으로 준다.
+        $gid = ''
+        try { $gid = [string]$g.ExternalDirectoryObjectId } catch { }
+
+        $d.Add(("GROUP`t{0}`t{1}`t{2}`t{3}`t{4}`t{5}`t{6}`t{7}" -f `
+            $g.DisplayName, $g.Alias, $g.PrimarySmtpAddress, $isTeam, $members, $created, $privacy, $gid))
     }
 
     New-TeavelResult -Message "그룹 $($groups.Count)개를 읽었습니다." -Details $d
@@ -458,7 +462,8 @@ function New-TeavelM365Group {
         $team = New-Team @params -ErrorAction Stop
         $d.Add("팀을 만들었습니다: $DisplayName")
         if ($tpl) { $d.Add("서식: $tpl") }
-        if ($team.GroupId) { $d.Add("그룹 id: $($team.GroupId)") }
+        # 부르는 쪽이 이 값으로 곧바로 채널을 붙인다. 형식을 바꾸면 저쪽도 바꿔야 한다.
+        if ($team.GroupId) { $d.Add("GROUPID`t$($team.GroupId)") }
 
         # 소유자가 여럿이면 나머지를 붙인다.
         foreach ($o in ($Owners | Select-Object -Skip 1)) {
@@ -491,6 +496,82 @@ function New-TeavelM365Group {
     $d.Add('만들어진 것이 Teams·아웃룩에 보이기까지 몇 분 걸릴 수 있습니다.')
 
     New-TeavelResult -Message "'$DisplayName' 을(를) 만들었습니다." -Details $d
+}
+
+<#
+.SYNOPSIS
+    팀에 선언된 채널을 맞춘다. 없는 것만 만들고, 이미 있으면 건드리지 않는다.
+.DESCRIPTION
+    여러 번 돌려도 안전해야 하므로 '만든다' 가 아니라 '맞춘다' 이다.
+    팀을 만들다 중간에 끊겨도 다시 돌리면 모자란 채널만 채워진다.
+
+    '일반'(General)은 팀을 만들면 저절로 생기므로 여기서 만들지 않는다.
+    선언 쪽에서 이미 걸러 내지만, 손으로 부를 수도 있으니 여기서도 막는다.
+
+    ■ 만든 채널은 기본이 '숨김' 이다
+
+    PowerShell 로 만든 채널은 구성원 화면에서 기본으로 접혀 있다.
+    선생님들이 "채널이 없다" 고 하는 원인이 대개 이것인데, Teams 앱에서
+    [표시]를 누르면 보인다. 부르는 쪽이 이 말을 반드시 전해야 한다.
+.PARAMETER GroupId
+    팀의 그룹 id. 재고나 만들기 결과에서 온다.
+.PARAMETER Channels
+    있어야 할 채널 이름들.
+#>
+function Sync-TeavelTeamChannel {
+    param(
+        [Parameter(Mandatory)][string] $GroupId,
+        [string[]] $Channels = @()
+    )
+
+    Import-Module MicrosoftTeams -ErrorAction Stop
+
+    $wanted = @($Channels | Where-Object {
+        $_ -and $_.Trim() -and $_.Trim() -notin @('일반', 'General', 'general')
+    } | ForEach-Object { $_.Trim() })
+
+    if ($wanted.Count -eq 0) {
+        return New-TeavelResult -Message '만들 채널이 없습니다.' -Details @()
+    }
+
+    # 이미 있는 것을 세어야 여러 번 돌려도 안전하다.
+    $existing = @()
+    try {
+        $existing = @(Get-TeamChannel -GroupId $GroupId -ErrorAction Stop |
+                      ForEach-Object { [string]$_.DisplayName })
+    } catch {
+        # 팀이 방금 만들어졌으면 아직 조회가 안 될 수 있다. 그때는 빈 목록으로 보고 만든다 —
+        # 이미 있는 것을 또 만들려 하면 아래에서 하나만 실패하고 나머지는 진행된다.
+    }
+
+    $made   = New-Object System.Collections.Generic.List[string]
+    $kept   = New-Object System.Collections.Generic.List[string]
+    $failed = New-Object System.Collections.Generic.List[string]
+
+    foreach ($name in $wanted) {
+        if ($existing -contains $name) { $kept.Add($name); continue }
+        try {
+            New-TeamChannel -GroupId $GroupId -DisplayName $name -ErrorAction Stop | Out-Null
+            $made.Add($name)
+        } catch {
+            $failed.Add("$($name): $($_.Exception.Message)")
+        }
+    }
+
+    $d = New-Object System.Collections.Generic.List[string]
+    if ($made.Count -gt 0)   { $d.Add("만든 채널: $($made -join ', ')") }
+    if ($kept.Count -gt 0)   { $d.Add("이미 있던 채널: $($kept -join ', ')") }
+    foreach ($f in $failed)  { $d.Add("실패: $f") }
+
+    if ($made.Count -gt 0) {
+        $d.Add('')
+        $d.Add('새로 만든 채널은 Teams 앱에서 접혀 있습니다. 채널 옆 [...] → [표시] 를 눌러야 보입니다.')
+    }
+
+    $msg = if ($made.Count -gt 0) { "채널 $($made.Count)개를 만들었습니다." } else { '채널이 이미 다 있습니다.' }
+    if ($failed.Count -gt 0) { throw "채널 $($failed.Count)개를 만들지 못했습니다. $($failed -join ' / ')" }
+
+    New-TeavelResult -Message $msg -Details $d
 }
 
 <#
@@ -599,4 +680,5 @@ function Remove-TeavelM365Group {
 Export-ModuleMember -Function `
     Get-TeavelModuleDirectory, Get-TeavelM365Readiness, Install-TeavelM365Module, `
     Install-TeavelModuleFromGallery, Connect-TeavelM365, `
-    Get-TeavelM365Inventory, New-TeavelM365Group, Rename-TeavelM365Group, Remove-TeavelM365Group
+    Get-TeavelM365Inventory, New-TeavelM365Group, Sync-TeavelTeamChannel, `
+    Rename-TeavelM365Group, Remove-TeavelM365Group
