@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Teavel.Platform;
 
@@ -35,17 +35,24 @@ public sealed class PathRegistration
         return current is not null && Split(current.Value).Any(Same);
     }
 
-    /// <summary>등록한다. 이미 돼 있으면 AlreadyOk.</summary>
-    public FixResult Register()
+    /// <summary>
+    /// 등록한다. 이미 돼 있으면 AlreadyOk.
+    /// </summary>
+    /// <param name="exePath">
+    /// 등록할 실행 파일. 이 파일이 <b>있는 폴더</b>가 PATH 에 들어간다.
+    /// 예전에는 이름을 'teavel.exe' 로 박아 두고 찾았는데, 포털이 배포하는 파일에는
+    /// 판 번호가 붙어(teavel-0.1.0.exe) 못 찾고 실패했다. 이제 부르는 쪽이 정확히 준다.
+    /// </param>
+    public FixResult Register(string exePath)
     {
         if (!OperatingSystem.IsWindows())
             return FixResult.NotSupported("Windows 에서만 할 수 있습니다.");
 
-        var dir = TargetDirectory;
-        if (!File.Exists(Path.Combine(dir, "teavel.exe")) && !File.Exists(Path.Combine(dir, "teavel")))
-            return FixResult.Failed(
-                "실행 파일이 있는 폴더를 찾지 못했습니다.",
-                $"확인한 곳: {dir}");
+        if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath))
+            return FixResult.Failed("실행 파일을 찾지 못했습니다.", $"확인한 곳: {exePath}");
+
+        var dir = (Path.GetDirectoryName(Path.GetFullPath(exePath)) ?? TargetDirectory)
+            .TrimEnd(Path.DirectorySeparatorChar);
 
         var current = _reg.ReadStringValue(RegistryRoot.CurrentUser, EnvironmentKey, PathValue);
 

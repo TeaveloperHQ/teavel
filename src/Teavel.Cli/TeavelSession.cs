@@ -183,6 +183,78 @@ public sealed class TeavelSession : IAsyncDisposable
         => M365Flow.FindTeacherAsync(_tools, name, ct);
 
     /// <summary>
+    /// 등록할 실행 파일을 정한다. 못 정하면 빈 문자열.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 이름을 짐작하지 않는다. 포털이 배포하는 파일에는 판 번호가 붙어
+    /// <c>teavel-0.1.0.exe</c> 처럼 오는데, 예전에는 <c>teavel.exe</c> 를 찾다가
+    /// 교사가 처음 하는 일에서 바로 실패했다.
+    /// </para>
+    /// <para>
+    /// 하나로 못 정하면 <b>물어본다.</b> 넘겨짚어 엉뚱한 파일을 등록하면
+    /// 나중에 그 파일을 지웠을 때 왜 안 되는지 알 길이 없다.
+    /// </para>
+    /// </remarks>
+    private string ResolveExe()
+    {
+        var found = TeavelExe.Find(_paths);
+
+        if (found.Path.Length > 0)
+        {
+            WarnIfRisky(found.Path);
+            return found.Path;
+        }
+
+        Console.WriteLine();
+        if (found.Candidates.Count == 0)
+        {
+            Ui.Warn("Teavel 실행 파일을 찾지 못했습니다.");
+            Ui.Dim($"      {found.How}");
+            Console.WriteLine();
+            Ui.Dim("      그 파일을 이 창에 끌어다 놓으시면 경로가 적힙니다.");
+
+            var typed = (Ui.Ask("      Teavel 실행 파일: ") ?? "").Trim().Trim('"');
+            if (typed.Length == 0 || !File.Exists(typed))
+            {
+                Ui.Info("등록하지 않았습니다. 나중에 '설치' 라고 치시면 다시 여쭙겠습니다.");
+                return "";
+            }
+            WarnIfRisky(typed);
+            return typed;
+        }
+
+        Ui.Warn($"Teavel 실행 파일이 여러 개 보입니다. 어느 것을 등록할까요?");
+        Ui.Dim($"      {found.How}");
+        Console.WriteLine();
+
+        for (var i = 0; i < Math.Min(found.Candidates.Count, 9); i++)
+            Ui.Plain($"        [{i + 1}] {Path.GetFileName(found.Candidates[i])}");
+
+        var pick = (Ui.Ask("      번호 (그냥 Enter 면 취소): ") ?? "").Trim();
+        if (!int.TryParse(pick, out var n) || n < 1 || n > Math.Min(found.Candidates.Count, 9))
+        {
+            Ui.Info("등록하지 않았습니다.");
+            return "";
+        }
+
+        WarnIfRisky(found.Candidates[n - 1]);
+        return found.Candidates[n - 1];
+    }
+
+    /// <summary>받은 자리 그대로 두면 곤란한 경우 짚어 준다. 막지는 않는다.</summary>
+    private static void WarnIfRisky(string exePath)
+    {
+        var why = TeavelExe.RiskyLocation(exePath);
+        if (why.Length == 0) return;
+
+        Console.WriteLine();
+        Ui.Warn(why);
+        Ui.Dim($"      지금 자리: {Path.GetDirectoryName(exePath)}");
+        Ui.Dim("      그대로 등록해 드립니다. 나중에 옮기시면 '설치' 를 한 번 더 실행해 주세요.");
+    }
+
+    /// <summary>
     /// 첫 낱말이 <paramref name="names"/> 중 하나면 나머지를 돌려준다. 아니면 null.
     /// </summary>
     /// <remarks>
@@ -429,16 +501,23 @@ public sealed class TeavelSession : IAsyncDisposable
             return;
         }
 
-        Ui.Fix("등록", _path.Register());
-        Ui.Fix("탐색기 우클릭 메뉴", _explorer.Register());
+        var exe = ResolveExe();
+        if (exe.Length == 0) return;
+
+        Ui.Fix("등록", _path.Register(exe));
+        Ui.Fix("탐색기 우클릭 메뉴", _explorer.Register(exe));
     }
 
     /// <summary>PATH 와 탐색기 우클릭 메뉴에 등록한다.</summary>
     public int RunRegister()
     {
         Ui.Title("Teavel 등록");
-        Ui.Fix("PowerShell 어디서나 실행", _path.Register());
-        Ui.Fix("탐색기 우클릭 메뉴", _explorer.Register());
+
+        var exe = ResolveExe();
+        if (exe.Length == 0) return 2;
+
+        Ui.Fix("PowerShell 어디서나 실행", _path.Register(exe));
+        Ui.Fix("탐색기 우클릭 메뉴", _explorer.Register(exe));
         return 0;
     }
 

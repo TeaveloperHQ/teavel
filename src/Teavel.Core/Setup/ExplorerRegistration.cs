@@ -1,4 +1,4 @@
-using Teavel.Platform;
+﻿using Teavel.Platform;
 
 namespace Teavel.Setup;
 
@@ -28,22 +28,22 @@ public sealed class ExplorerRegistration
         _paths = paths;
     }
 
-    /// <summary>teavel.exe 전체 경로.</summary>
-    public string ExePath => Path.Combine(_paths.AppDirectory, "teavel.exe");
+    /// <summary>이름을 짐작하지 않는다 — 부르는 쪽이 정확한 경로를 준다.</summary>
 
     /// <summary>등록돼 있는지.</summary>
     public bool IsRegistered()
         => _reg.KeyExists(RegistryRoot.CurrentUser, FolderKey + @"\command");
 
     /// <summary>우클릭 메뉴를 넣는다.</summary>
-    public FixResult Register()
+    /// <param name="exePath">등록할 실행 파일. 판 번호가 붙은 이름이어도 된다.</param>
+    public FixResult Register(string exePath)
     {
         if (!OperatingSystem.IsWindows())
             return FixResult.NotSupported("Windows 에서만 할 수 있습니다.");
 
-        var exe = ExePath;
-        if (!File.Exists(exe))
-            return FixResult.Failed("teavel.exe 를 찾지 못했습니다.", $"확인한 곳: {exe}");
+        var exe = exePath;
+        if (string.IsNullOrWhiteSpace(exe) || !File.Exists(exe))
+            return FixResult.Failed("실행 파일을 찾지 못했습니다.", $"확인한 곳: {exe}");
 
         // %V = 우클릭한 폴더. Directory 와 Directory\Background 모두에서 폴더 경로를 준다
         //      (%1 은 Background 에서 비어 있어 쓸 수 없다).
