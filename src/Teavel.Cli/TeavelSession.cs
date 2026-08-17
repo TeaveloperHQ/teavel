@@ -182,6 +182,72 @@ public sealed class TeavelSession : IAsyncDisposable
     public Task<int> RunFindTeacherAsync(string? name, CancellationToken ct)
         => M365Flow.FindTeacherAsync(_tools, name, ct);
 
+    /// <summary>도구가 아니라 흐름인 것을 실행한다.</summary>
+    private async Task RunFlowAsync(ToolSpec tool, IntentMatch match, CancellationToken ct)
+    {
+        switch (tool.Function)
+        {
+            case "m365":
+                await RunM365Async(ct).ConfigureAwait(false);
+                return;
+
+            case "m365.archive":
+                Console.WriteLine();
+                Ui.Info("지난 학년도 팀을 정리하시려는 것 같습니다.");
+                Ui.Dim("      ⑤ 정리 에서 하나씩 고르실 수 있습니다.");
+                Ui.Dim("      '지난 학년도로 보관' 을 고르면 이름 앞에 연도를 붙이고 학생만 내보냅니다.");
+                Ui.Dim("      팀과 파일·대화는 그대로 남습니다.");
+                Console.WriteLine();
+                if (!AssumeYes && !Ui.Confirm("      들어갈까요?")) { Ui.Info("취소했습니다."); return; }
+                await RunM365Async(ct).ConfigureAwait(false);
+                return;
+
+            case "m365.teacher":
+                var name = match.Arguments.TryGetValue("Name", out var n) ? n?.ToString() : null;
+                if (string.IsNullOrWhiteSpace(name)) name = Ui.Ask("      찾으실 선생님 성함: ")?.Trim();
+                await RunFindTeacherAsync(name, ct).ConfigureAwait(false);
+                return;
+
+            default:
+                Ui.Error($"'{tool.Function}' 은(는) 아직 만들어지지 않았습니다.");
+                return;
+        }
+    }
+
+    /// <summary>
+    /// 학교 일이라는 것은 알았고, 그 안에서 <b>무엇을 하려는지</b>까지 가른다.
+    /// </summary>
+    /// <remarks>
+    /// 전부 한 흐름으로 보내면 "작년 팀 백업해줘" 라고 해도 만들기부터 시작한다.
+    /// 아무것도 안 하는 것보다 나쁘다 — 엉뚱한 일을 하기 때문이다.
+    ///
+    /// 하나로 못 정하면 <b>짐작하지 않고 물어본다.</b> 다만 그냥 묻는 것이 아니라
+    /// 할 수 있는 일을 늘어놓고 고르게 한다 — 무엇을 물어야 할지 모르는 분들이다.
+    /// </remarks>
+    private async Task RunSchoolWorkAsync(string line, CancellationToken ct)
+    {
+        var t = line.Replace(" ", "").ToLowerInvariant();
+
+        var tidyWords = new[] { "백업", "보관", "정리", "지난", "작년", "지난해", "묵은", "옛" };
+        var makeWords = new[] { "만들", "생성", "구성", "새로", "올해", "새학기", "신학기" };
+
+        var wantsTidy = tidyWords.Any(w => t.Contains(w, StringComparison.Ordinal));
+        var wantsMake = makeWords.Any(w => t.Contains(w, StringComparison.Ordinal));
+
+        if (wantsTidy && !wantsMake)
+        {
+            Console.WriteLine();
+            Ui.Info("지난 학년도 팀을 정리하시려는 것 같습니다.");
+            Ui.Dim("      학교 구성 화면으로 들어가면 ⑤ 정리 에서 하나씩 고르실 수 있습니다.");
+            Ui.Dim("      '지난 학년도로 보관' 을 고르면 이름 앞에 연도를 붙이고 학생만 내보냅니다.");
+            Ui.Dim("      팀과 파일·대화는 그대로 남습니다.");
+            Console.WriteLine();
+            if (!Ui.Confirm("      들어갈까요?")) { Ui.Info("취소했습니다."); return; }
+        }
+
+        await RunM365Async(ct).ConfigureAwait(false);
+    }
+
     // ─────────────────────────────── 언어 모델 ───────────────────────────────
 
     /// <summary>언어 모델을 내려받는다. 이미 쓸 수 있으면 알려 주고 끝낸다.</summary>
@@ -389,7 +455,7 @@ public sealed class TeavelSession : IAsyncDisposable
         Ui.Title("자가점검");
 
         var issues = ToolSelfCheck.Run(_tools.ScriptsDirectory);
-        if (issues.Count == 0) Ui.Ok($"도구 {ToolCatalog.All.Count}개가 스크립트와 맞습니다.");
+        if (issues.Count == 0) Ui.Ok($"도구 {ToolCatalog.All.Count(t => !t.Module.StartsWith('@'))}개가 스크립트와 맞습니다.");
         else
         {
             Ui.Error($"{issues.Count}가지가 어긋났습니다.");
@@ -474,10 +540,6 @@ public sealed class TeavelSession : IAsyncDisposable
             if (line is "점검" or "check") { await RunCheckAsync(ct).ConfigureAwait(false); continue; }
             if (line is "고침" or "손보기" or "fix") { await RunFixAsync(null, ct).ConfigureAwait(false); continue; }
 
-            // 학교 전체를 만지는 일은 도구 하나로 되는 것이 아니라 한 판이 필요하다.
-            // 관리자가 'teavel m365' 라는 말을 알 리 없으므로, 하고 싶은 말로 찾아 준다.
-            if (LooksLikeSchoolWork(line)) { await RunM365Async(ct).ConfigureAwait(false); continue; }
-
             await HandleUtteranceAsync(line, ct).ConfigureAwait(false);
         }
         return 0;
@@ -495,42 +557,6 @@ public sealed class TeavelSession : IAsyncDisposable
         await _mcp.ConnectAllAsync(ct).ConfigureAwait(false);
         await HandleUtteranceAsync(utterance, ct).ConfigureAwait(false);
         return 0;
-    }
-
-    /// <summary>
-    /// 학교 전체 구성 이야기인지 알아본다.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// 관리자는 <c>teavel m365</c> 라는 말을 모른다. 도움말을 봐야 알 수 있는데,
-    /// 그건 '무엇을 물어야 할지도 모르는 사람' 을 상대한다는 우리 원칙에 어긋난다.
-    /// </para>
-    /// <para>
-    /// 그래서 하고 싶은 말로 알아듣는다 — "반 팀 만들어줘" · "학생들 넣어야 해" ·
-    /// "teams 구성" 같은 것. 도구 하나로 되는 일이 아니라 한 판이 필요한 일이라
-    /// 보통 갈래(도구 고르기)로 보내지 않고 여기서 가른다.
-    /// </para>
-    /// </remarks>
-    internal static bool LooksLikeSchoolWork(string line)
-    {
-        var t = line.Replace(" ", "").ToLowerInvariant();
-
-        // '학교 전체' 를 가리키는 말과 '만들다/넣다' 가 함께 있어야 한다.
-        // '엑셀 합쳐줘' 같은 것이 여기로 새면 안 된다.
-        var about = new[]
-        {
-            "m365", "ms365", "office365", "오피스365", "팀즈", "teams",
-            "반팀", "학급팀", "수업팀", "학교그룹", "m365그룹", "그룹구성", "팀구성",
-            "학생명단", "반배정", "학급배정", "구성원배정",
-        };
-        if (about.Any(w => t.Contains(w, StringComparison.Ordinal))) return true;
-
-        // '팀'·'그룹'·'반' 은 다른 말에도 흔히 섞이므로 함께 오는 말을 본다.
-        var thing = new[] { "팀", "그룹", "반", "학급", "명단" };
-        var verb = new[] { "만들", "생성", "구성", "정리", "넣", "배정", "추가", "세팅" };
-
-        return thing.Any(w => t.Contains(w, StringComparison.Ordinal))
-            && verb.Any(w => t.Contains(w, StringComparison.Ordinal));
     }
 
     private async Task HandleUtteranceAsync(string utterance, CancellationToken ct)
@@ -570,6 +596,16 @@ public sealed class TeavelSession : IAsyncDisposable
     private async Task RunToolAsync(IntentMatch match, CancellationToken ct)
     {
         var tool = match.Tool;
+
+        // "@flow" 는 PowerShell 함수가 아니라 CLI 의 한 판이다.
+        // 도구 목록에 함께 올려 둔 덕에 언어 모델과 낱말 라우터가 이것도 후보로 보고,
+        // 관리자는 'teavel m365' 라는 말을 몰라도 하고 싶은 말로 닿는다.
+        if (tool.Module == "@flow")
+        {
+            await RunFlowAsync(tool, match, ct).ConfigureAwait(false);
+            return;
+        }
+
         var args = new Dictionary<string, object>(match.Arguments, StringComparer.OrdinalIgnoreCase);
 
         Console.WriteLine();

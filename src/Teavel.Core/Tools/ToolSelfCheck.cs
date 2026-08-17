@@ -40,6 +40,9 @@ public static class ToolSelfCheck
 
         foreach (var tool in ToolCatalog.All)
         {
+            // "@flow" 는 PowerShell 함수가 아니라 CLI 의 한 판이다. 대조할 .psm1 이 없다.
+            if (tool.Module.StartsWith('@')) continue;
+
             if (!moduleCache.TryGetValue(tool.Module, out var functions))
             {
                 var path = Path.Combine(scriptsDirectory, tool.Module + ".psm1");

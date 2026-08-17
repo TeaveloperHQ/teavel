@@ -1,4 +1,4 @@
-using Teavel.Tools;
+﻿using Teavel.Tools;
 
 namespace Teavel.Intent;
 
@@ -175,6 +175,15 @@ public sealed class LayeredIntentRouter : IIntentRouter
     public bool ModelAvailable => _model is not null;
 
     /// <summary>
+    /// 모델이 마지막으로 실패한 까닭. 성공했거나 아직 안 썼으면 null.
+    /// </summary>
+    /// <remarks>
+    /// 조용히 낱말로 넘어가면 왜 말귀가 어두워졌는지 아무도 모른다.
+    /// 화면에는 굳이 안 띄우더라도 자가점검에서는 보여야 한다.
+    /// </remarks>
+    public string? ModelFailure { get; private set; }
+
+    /// <summary>
     /// 모델과 낱말 라우터의 1순위가 갈렸을 때 모델 후보에 매기는 점수.
     /// <see cref="KeywordIntentRouter.ConfidentScore"/> 보다 낮아야 한다 — 그래야 CLI 가
     /// 바로 실행하지 않고 교사에게 고르게 한다.
@@ -190,7 +199,27 @@ public sealed class LayeredIntentRouter : IIntentRouter
 
         if (_model is null) return byKeyword;
 
-        var byModel = await _model.RouteAsync(utterance, ct).ConfigureAwait(false);
+        // 모델이 잘못돼도 Teavel 이 죽으면 안 된다.
+        //
+        // 실기에서 이렇게 죽었다(2026-08-17): 도구를 세 개 더했더니 지시문이 문맥 한도를
+        // 넘었고, 그 예외가 아무 데서도 안 잡혀 앱이 통째로 크래시했다.
+        // 말을 못 알아듣는 것과 프로그램이 죽는 것은 전혀 다르다 —
+        // 못 알아들으면 낱말로라도 고르면 되고, 교사는 다시 말하면 된다.
+        IReadOnlyList<IntentMatch> byModel;
+        try
+        {
+            byModel = await _model.RouteAsync(utterance, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            ModelFailure = ex.Message;
+            return byKeyword;
+        }
+
         if (byModel.Count == 0) return byKeyword;
 
         // 두 라우터가 갈리면 넘겨짚지 않는다 — 모델 답을 맨 앞에 둔 목록을 보여 주고

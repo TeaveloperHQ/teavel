@@ -1,4 +1,4 @@
-namespace Teavel.Tools;
+﻿namespace Teavel.Tools;
 
 /// <summary>도구가 속한 영역 — 메뉴 묶음이자 LLM 프롬프트의 분류.</summary>
 public enum ToolCategory
@@ -17,6 +17,17 @@ public enum ToolCategory
 
     /// <summary>PC 세팅 — 프린터 등, 말로 시킬 수 있는 세팅 작업.</summary>
     Setup,
+
+    /// <summary>
+    /// 학교 전체 — 그룹·Teams 구성. 도구 하나가 아니라 <b>한 판</b>이 필요한 일이다.
+    /// </summary>
+    /// <remarks>
+    /// 이것들은 PowerShell 함수 하나로 끝나지 않고 여러 단계를 사람과 주고받으며 간다.
+    /// 그래서 Module 을 <c>@flow</c> 로 두어 도구가 아니라 흐름임을 표시한다.
+    /// 목록에 함께 올려 두는 이유는 <b>언어 모델과 낱말 라우터가 이것도 후보로 보게</b> 하기 위해서다 —
+    /// 따로 빼 두면 "작년 팀 백업해줘" 를 알아들을 방법이 없다.
+    /// </remarks>
+    School,
 }
 
 /// <summary>인자의 종류. CLI 입력 검증과 LLM 힌트에 함께 쓰인다.</summary>

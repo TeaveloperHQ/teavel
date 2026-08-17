@@ -167,7 +167,7 @@ while ($true) {
         'Get-TeavelM365Inventory', 'Get-TeavelTenantUser',
         'Get-TeavelUserName', 'Set-TeavelDisplayName',
         'New-TeavelM365Group', 'Sync-TeavelTeamChannel',
-        'Get-TeavelTeamMember', 'Add-TeavelTeamMember',
+        'Get-TeavelTeamMember', 'Add-TeavelTeamMember', 'Remove-TeavelTeamStudent',
         'Rename-TeavelM365Group', 'Remove-TeavelM365Group'
     )
     if ($allowed -notcontains $fn) {

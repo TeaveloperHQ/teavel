@@ -1,4 +1,4 @@
-using Teavel.Setup;
+﻿using Teavel.Setup;
 
 namespace Teavel.Cli;
 
@@ -82,6 +82,61 @@ public static class Ui
         return line;
     }
 
+    /// <summary>고를 수 있는 것 하나.</summary>
+    /// <param name="Key">돌려줄 값. 보통 "1" · "2" 같은 번호.</param>
+    /// <param name="Label">화면에 보여 줄 줄.</param>
+    /// <param name="Words">이 갈래를 가리킬 때 쓸 법한 말들. 숫자 대신 이렇게 쳐도 알아듣는다.</param>
+    public sealed record Choice(string Key, string Label, params string[] Words);
+
+    /// <summary>
+    /// 번호로도, <b>말로도</b> 고를 수 있게 묻는다.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 선생님들은 중간에 번호 대신 하고 싶은 말을 그냥 친다 —
+    /// "이건 작년 거야", "지워줘", "그냥 둬". 그때 숫자가 아니라고 기본값으로 넘겨 버리면
+    /// <b>말한 것과 다른 일이 벌어진다.</b> 지우자고 했는데 그냥 두거나, 그 반대이거나.
+    /// </para>
+    /// <para>
+    /// 그래서 말도 받는다. 알아듣지 못하면 넘겨짚지 않고 다시 묻되,
+    /// 이렇게 말해도 된다는 것을 함께 보여 준다.
+    /// </para>
+    /// </remarks>
+    public static string Choose(string prompt, IReadOnlyList<Choice> choices, string defaultKey)
+    {
+        foreach (var c in choices) Plain("        " + c.Label);
+
+        while (true)
+        {
+            var line = Ask($"        {prompt} [{defaultKey}] ");
+            if (line is null) return defaultKey;               // EOF — 물어볼 사람이 없다
+
+            var t = line.Trim();
+            if (t.Length == 0) return defaultKey;
+
+            // 번호를 그대로 쳤을 때.
+            var byKey = choices.FirstOrDefault(c => string.Equals(c.Key, t, StringComparison.OrdinalIgnoreCase));
+            if (byKey is not null) return byKey.Key;
+
+            // 말로 쳤을 때. 여러 갈래가 걸리면 넘겨짚지 않는다.
+            var said = t.Replace(" ", "").ToLowerInvariant();
+            var hits = choices
+                .Where(c => c.Words.Any(w => said.Contains(w.Replace(" ", "").ToLowerInvariant(),
+                                                          StringComparison.Ordinal)))
+                .ToList();
+
+            if (hits.Count == 1) return hits[0].Key;
+
+            Console.WriteLine();
+            Warn(hits.Count > 1
+                ? "여러 가지로 들립니다. 하나만 골라 주세요."
+                : "무슨 말씀인지 알아듣지 못했습니다.");
+            Dim("        번호를 치셔도 되고, 이렇게 말씀하셔도 됩니다:");
+            foreach (var c in choices.Where(c => c.Words.Length > 0))
+                Dim($"          {c.Key} — {string.Join(" · ", c.Words.Take(3))}");
+        }
+    }
+
     /// <summary>
     /// 예/아니오를 묻는다. 그냥 Enter 는 '예'.
     /// </summary>
@@ -97,9 +152,18 @@ public static class Ui
             var line = Ask($"{question} [Y/n] ");
             if (line is null) return false;          // EOF — 물어볼 사람이 없다
 
-            var answer = line.Trim().ToLowerInvariant();
-            if (answer.Length == 0 || answer is "y" or "yes" or "ㅇ" or "예" or "네") return true;
-            if (answer is "n" or "no" or "ㄴ" or "아니오" or "아니요") return false;
+            var answer = line.Trim().ToLowerInvariant().Replace(" ", "");
+            if (answer.Length == 0) return true;
+
+            // 말로 답하는 경우도 받는다 — "응 해줘" · "아니 됐어" · "그만".
+            if (answer is "y" or "yes" or "ㅇ" or "예" or "네" or "응" or "어" or "그래" or "좋아"
+                or "해줘" or "해" or "맞아" or "맞습니다" or "진행") return true;
+            if (answer is "n" or "no" or "ㄴ" or "아니오" or "아니요" or "아니" or "안돼" or "싫어"
+                or "그만" or "됐어" or "취소" or "나중에" or "틀려" or "아닙니다") return false;
+
+            if (answer.StartsWith("아니", StringComparison.Ordinal)) return false;
+            if (answer.StartsWith("네", StringComparison.Ordinal)
+                || answer.StartsWith("예", StringComparison.Ordinal)) return true;
         }
     }
 }

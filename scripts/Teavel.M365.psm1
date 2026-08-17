@@ -387,7 +387,31 @@ function Connect-TeavelM365 {
             $p = @{}
             if ($Account) { $p['AccountId'] = $Account }
             if ((Get-Command Connect-MicrosoftTeams).Parameters.ContainsKey('DisableWAM')) { $p['DisableWAM'] = $true }
-            Connect-MicrosoftTeams @p -ErrorAction Stop | Out-Null
+
+            # 창 방식(브라우저)을 쓰지 않는다.
+            #
+            # 이 상주 세션에는 창이 없어서, 로그인을 마친 브라우저가 돌아올 곳이 없다.
+            # 실기에서 두 가지로 나타났다(2026-08-17):
+            #   · 창이 아예 안 뜨고 'A window handle must be configured'
+            #   · 창은 떠서 로그인까지 했는데 'AADSTS900561 — GET 요청을 받았습니다'
+            # 뒤엣것이 특히 고약하다. 로그인을 다 하고 나서 실패하므로,
+            # 관리자는 자기가 무엇을 잘못했는지 알 수 없다.
+            #
+            # 코드 방식은 창이 필요 없다. 화면에 주소와 코드가 나오고 사람이 아무 기기에서나
+            # 넣으면 된다. 손이 한 번 더 가지만 반드시 된다 — 되는 길로 간다.
+            $byCode = $false
+            foreach ($name in 'UseDeviceAuthentication', 'DeviceCode', 'Device') {
+                if ((Get-Command Connect-MicrosoftTeams).Parameters.ContainsKey($name)) { $byCode = $true; break }
+            }
+
+            if ($byCode) {
+                Write-TeavelDeviceLoginNotice
+                Connect-TeavelTeamsByCode -Account $Account
+            }
+            else {
+                # 코드 방식을 지원하지 않는 판이면 창 방식이라도 해 본다.
+                Connect-MicrosoftTeams @p -ErrorAction Stop | Out-Null
+            }
         }
     }
 
@@ -555,6 +579,59 @@ function New-TeavelM365Group {
     $d.Add('만들어진 것이 Teams·아웃룩에 보이기까지 몇 분 걸릴 수 있습니다.')
 
     New-TeavelResult -Message "'$DisplayName' 을(를) 만들었습니다." -Details $d
+}
+
+<#
+.SYNOPSIS
+    창이 안 뜰 때 쓰는 로그인 안내. 코드를 적어 넣는 방식이다.
+#>
+function Write-TeavelDeviceLoginNotice {
+    Write-Host ''
+    Write-Host '  팀 로그인은 코드를 적어 넣는 방식으로 합니다.'
+    Write-Host ''
+    Write-Host '  ┌─────────────────────────────────────────────────┐'
+    Write-Host '  │  잠시 뒤 아래에 주소와 짧은 코드가 나옵니다      │'
+    Write-Host '  └─────────────────────────────────────────────────┘'
+    Write-Host ''
+    Write-Host '  ① 인터넷 창을 직접 여세요 (엣지·크롬 아무거나)'
+    Write-Host '  ② 아래에 나오는 주소를 주소창에 칩니다'
+    Write-Host '  ③ 아래에 나오는 코드를 넣고 [다음]'
+    Write-Host '  ④ 학교 계정으로 로그인합니다'
+    Write-Host ''
+    Write-Host '  휴대전화로 하셔도 됩니다. 같은 주소·같은 코드입니다.'
+    Write-Host ''
+}
+
+<#
+.SYNOPSIS
+    코드를 적어 넣는 방식으로 팀에 연결한다.
+.DESCRIPTION
+    상주 세션에는 창이 없어 브라우저 로그인이 실패할 수 있다. 이 방식은 창이 필요 없다 —
+    화면에 주소와 코드가 나오고, 사람이 아무 기기에서나 그것을 넣으면 된다.
+
+    매개변수 이름이 판마다 다르므로 받을 수 있는 것을 찾아 쓴다.
+#>
+function Connect-TeavelTeamsByCode {
+    param(
+        [string] $Account
+    )
+
+    Import-Module MicrosoftTeams -ErrorAction Stop
+
+    $cmd = Get-Command Connect-MicrosoftTeams
+    $p = @{}
+    if ($Account) { $p['AccountId'] = $Account }
+
+    foreach ($name in 'UseDeviceAuthentication', 'DeviceCode', 'Device') {
+        if ($cmd.Parameters.ContainsKey($name)) { $p[$name] = $true; break }
+    }
+
+    if ($p.Count -eq 0 -or -not ($p.Keys | Where-Object { $_ -ne 'AccountId' })) {
+        throw '이 판의 Teams 모듈은 코드로 로그인하는 방법을 지원하지 않습니다. ' +
+              'PowerShell 창에서 Connect-MicrosoftTeams 를 먼저 실행하신 뒤 다시 시도해 주세요.'
+    }
+
+    Connect-MicrosoftTeams @p -ErrorAction Stop | Out-Null
 }
 
 <#
@@ -862,6 +939,57 @@ function Add-TeavelTeamMember {
 
 <#
 .SYNOPSIS
+    팀에서 학생들을 내보낸다. 소유자(교사)는 그대로 둔다.
+.DESCRIPTION
+    지난 학년도 팀을 보관할 때 쓴다. 팀과 그 안의 파일·대화는 그대로 두고
+    구성원만 비우는 것이라, 지우는 것과 전혀 다르다 —
+    나중에 자료를 찾아볼 일이 생겨도 남아 있다.
+
+    소유자는 빼지 않는다. 소유자가 아무도 없는 팀은 관리 화면에서 손대기 까다로워지고,
+    담당 선생님이 나중에 자료를 찾아볼 길도 막힌다.
+
+    한 명씩 뺀다. 한 사람이 실패해도 나머지는 빼야 하기 때문이다.
+#>
+function Remove-TeavelTeamStudent {
+    param(
+        [Parameter(Mandatory)][string] $GroupId,
+        [string[]] $Keep = @()
+    )
+
+    Import-Module MicrosoftTeams -ErrorAction Stop
+
+    $all = @(Get-TeamUser -GroupId $GroupId -ErrorAction Stop)
+
+    $owners = @($all | Where-Object { [string]$_.Role -eq 'Owner' } | ForEach-Object { [string]$_.User })
+    $keepSet = @($owners + $Keep | Where-Object { $_ })
+
+    $targets = @($all |
+        Where-Object { [string]$_.Role -ne 'Owner' } |
+        ForEach-Object { [string]$_.User } |
+        Where-Object { $keepSet -notcontains $_ })
+
+    $done   = New-Object System.Collections.Generic.List[string]
+    $failed = New-Object System.Collections.Generic.List[string]
+
+    foreach ($u in $targets) {
+        try {
+            Invoke-TeavelWrite -Command 'Remove-TeamUser' -Arguments @{
+                GroupId = $GroupId; User = $u; Role = 'Member'
+            } | Out-Null
+            $done.Add($u)
+        }
+        catch { $failed.Add("$($u) — $($_.Exception.Message)") }
+    }
+
+    $d = New-Object System.Collections.Generic.List[string]
+    $d.Add("소유자 $($owners.Count)명은 그대로 두었습니다.")
+    foreach ($f in $failed) { $d.Add("실패: $f") }
+
+    New-TeavelResult -Message "$($done.Count)명을 내보냈습니다." -Details $d
+}
+
+<#
+.SYNOPSIS
     그룹·팀의 이름을 바꾼다. 내용은 그대로 남는다.
 .DESCRIPTION
     지우고 다시 만들면 파일·대화·팀이 전부 날아간다. 이름만 바꾸면 그대로 둔 채
@@ -966,8 +1094,9 @@ function Remove-TeavelM365Group {
 Export-ModuleMember -Function `
     Get-TeavelModuleDirectory, Get-TeavelM365Readiness, Install-TeavelM365Module, `
     Install-TeavelModuleFromGallery, Connect-TeavelM365, Invoke-TeavelWrite, `
+    Connect-TeavelTeamsByCode, `
     Get-TeavelM365Inventory, Get-TeavelTenantUser, `
     Get-TeavelUserName, Set-TeavelDisplayName, `
     New-TeavelM365Group, Sync-TeavelTeamChannel, `
-    Get-TeavelTeamMember, Add-TeavelTeamMember, `
+    Get-TeavelTeamMember, Add-TeavelTeamMember, Remove-TeavelTeamStudent, `
     Rename-TeavelM365Group, Remove-TeavelM365Group

@@ -1,4 +1,4 @@
-namespace Teavel.Model;
+﻿namespace Teavel.Model;
 
 /// <summary>
 /// 언어 모델 설정. 생기부 도우미(LLLM)의 Config 와 같은 방식이다 —
@@ -54,7 +54,9 @@ public static class TeavelModelConfig
     /// 실측: 도구 목록 프리픽스 730 토큰 + 교사의 말·출력 100 안팎 → 1024 면 여유가 있다.
     /// 도구를 크게 늘리면 이 값도 함께 올려야 한다(자가점검이 알려 준다).
     /// </remarks>
-    public const int PickerContextSize = 1024;
+    // 도구가 늘면 지시문도 길어진다. 1024 로는 도구 23개에서 넘쳤다(896/1024 에서 터짐).
+    // 여유를 두되 무한정 키우지 않는다 — 문맥이 크면 첫 응답이 느려진다.
+    public const int PickerContextSize = 2048;
 
     /// <summary>
     /// 인자 뽑기에 쓸 문맥 크기. 지시문이 짧아 더 작아도 된다.

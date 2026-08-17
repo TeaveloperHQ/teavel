@@ -24,6 +24,9 @@ public sealed class M365Flow
     private readonly ToolRunner _tools;
     private readonly bool _assumeYes;
 
+    /// <summary>팀에 붙었는지. 두 번째 로그인은 정말 필요할 때까지 미룬다.</summary>
+    private bool _teamsReady;
+
     public M365Flow(ToolRunner tools, bool assumeYes)
     {
         _tools = tools;
@@ -150,11 +153,15 @@ public sealed class M365Flow
     {
         Ui.Title("② 학교 계정으로 로그인");
 
-        // 팀을 만들 일이 없으면 Teams 로그인은 시키지 않는다 — 로그인 한 번도 벅찬 분들이다.
-        // 명단으로 반을 만들 수도 있으므로 선언에 팀이 없어도 Teams 는 붙여 둔다.
-        var needsTeams = true;
-
-        var args = new Dictionary<string, object?> { ["TeamsToo"] = needsTeams };
+        // 여기서는 메일·그룹(Exchange)만 붙인다.
+        //
+        // 팀(Teams)은 실제로 만들거나 사람을 넣을 때만 필요하다. 그런데 처음부터 붙이면
+        // 시작하자마자 로그인 창이 두 번 뜬다 — 로그인 한 번도 버거운 분들에게 그건 벽이다.
+        // 게다가 그 두 번째 창이 뒤에 숨어 못 보고 지나치면 거기서 통째로 끝나 버린다.
+        // 실기에서 그랬다(2026-08-17): 재고도 못 보고 'User canceled authentication' 로 끝났다.
+        //
+        // 그래서 미룬다. 읽기만 하다 끝내는 관리자는 로그인을 한 번만 하면 된다.
+        var args = new Dictionary<string, object?> { ["TeamsToo"] = false };
         var res = await host.CallAsync("Connect-TeavelM365", args,
             timeout: TimeSpan.FromMinutes(20), ct: ct).ConfigureAwait(false);
 
@@ -168,6 +175,33 @@ public sealed class M365Flow
         Ui.Ok(res.Message);
         Ui.Details(res.Details);
         return true;
+    }
+
+    /// <summary>
+    /// 팀에 붙는다. 이미 붙었으면 아무것도 하지 않는다.
+    /// </summary>
+    /// <remarks>
+    /// 정말 필요한 자리에서만 부른다 — 팀을 만들기 직전, 사람을 넣기 직전.
+    /// 실패해도 부르는 쪽이 판단하게 <c>false</c> 를 돌려준다. 팀이 없어도 할 수 있는 일이 있다.
+    /// </remarks>
+    private async Task<bool> EnsureTeamsAsync(M365Host host, CancellationToken ct)
+    {
+        if (_teamsReady) return true;
+
+        Console.WriteLine();
+        Ui.Info("팀 작업을 위해 한 번 더 로그인이 필요합니다.");
+
+        var res = await host.CallAsync("Connect-TeavelM365",
+            new Dictionary<string, object?> { ["TeamsToo"] = true },
+            timeout: TimeSpan.FromMinutes(20), ct: ct).ConfigureAwait(false);
+
+        if (res.Ok) { _teamsReady = true; return true; }
+
+        Ui.Error(res.Message);
+        Ui.Details(res.Details);
+        Console.WriteLine();
+        Ui.Dim("      팀에 붙지 못했습니다. 팀을 만들거나 사람을 넣는 일은 할 수 없습니다.");
+        return false;
     }
 
     // ───────────────────────────── 재고 ─────────────────────────────
@@ -282,8 +316,16 @@ public sealed class M365Flow
     /// 그 계정은 팀에 넣어도 Teams 에 들어오지 못하는데, 관리자는 대개 모르고 있다.
     /// </para>
     /// </remarks>
-    private static async Task ShowPeopleAsync(M365Host host, CancellationToken ct)
+    private async Task ShowPeopleAsync(M365Host host, CancellationToken ct)
     {
+        // 사람 목록은 Teams 쪽에서 온다. 그것 하나 보자고 로그인을 한 번 더 시키지 않는다 —
+        // 나중에 팀을 만들 때 어차피 붙게 되고, 그때 보여 줘도 늦지 않다.
+        if (!_teamsReady)
+        {
+            Ui.Dim("      (학교 사람 목록은 팀에 연결한 뒤에 보여 드립니다)");
+            return;
+        }
+
         var res = await host.CallAsync("Get-TeavelTenantUser",
             timeout: TimeSpan.FromMinutes(10), ct: ct).ConfigureAwait(false);
 
@@ -514,7 +556,7 @@ public sealed class M365Flow
 
         if (candidates.Count == 0) return inventory;
 
-        Ui.Title("④ 정리");
+        Ui.Title("⑤ 정리");
         Ui.Dim($"      정리해 볼 만한 것이 {candidates.Count}개 있습니다. 하나씩 여쭙겠습니다.");
         Console.WriteLine();
         Ui.Dim("      지우면 그 안의 파일과 대화가 함께 사라집니다.");
@@ -538,9 +580,24 @@ public sealed class M365Flow
                  + (g.Created.Length > 0 ? $" · {g.Created} 에 만듦" : ""));
             if (t.Note.Length > 0) Ui.Dim($"      {t.Note}");
 
-            Ui.Plain("        [1] 이름 바꿔서 그대로 두기   [2] 지우기   [3] 그냥 두기");
-            var pick = (Ui.Ask("        고르세요 [3] ") ?? "3").Trim();
-            if (pick.Length == 0) pick = "3";
+            // 보관은 지난 학년도 팀을 다루는 실제 방식이다 —
+            // 이름 앞에 연도를 붙이고 학생을 내보내되, 팀과 자료는 그대로 둔다.
+            // 지우는 것과 전혀 다르므로 갈래를 따로 둔다.
+            var year = YearOf(g);
+            var archived = year.Length > 0 ? $"{year} {g.DisplayName}" : "";
+
+            var options = new List<Ui.Choice>
+            {
+                new("1", "[1] 이름 바꿔서 그대로 두기", "이름", "이름바꿔", "이름변경", "바꿔", "개명"),
+                new("2", "[2] 지우기", "지워", "지우", "삭제", "없애", "빼", "제거"),
+                new("3", "[3] 그냥 두기", "그냥", "놔둬", "두기", "넘어가", "패스", "건너뛰", "몰라"),
+            };
+            if (archived.Length > 0)
+                options.Add(new Ui.Choice("4",
+                    $"[4] 지난 학년도로 보관   →  '{archived}' 로 바꾸고 학생만 내보냅니다",
+                    "보관", "백업", "작년", "지난", "묵은", "archive"));
+
+            var pick = Ui.Choose("고르세요", options, "3");
 
             if (pick == "1")
             {
@@ -603,6 +660,38 @@ public sealed class M365Flow
                 if (r.Ok) { Ui.Ok(r.Message); inventory.Remove(g); }
                 else { Ui.Error(r.Message); Ui.Details(r.Details); }
             }
+            else if (pick == "4" && archived.Length > 0)
+            {
+                if (!await EnsureTeamsAsync(host, ct).ConfigureAwait(false)) continue;
+
+                var r = await host.CallAsync("Rename-TeavelM365Group", new Dictionary<string, object?>
+                {
+                    ["Identity"] = g.MailNickname,
+                    ["NewDisplayName"] = archived,
+                }, ct: ct).ConfigureAwait(false);
+
+                if (!r.Ok) { Ui.Error(r.Message); Ui.Details(r.Details); continue; }
+                Ui.Ok(r.Message);
+
+                var i2 = inventory.IndexOf(g);
+                if (i2 >= 0) inventory[i2] = g with { DisplayName = archived };
+
+                if (g.GroupId.Length == 0)
+                {
+                    Ui.Warn("이름은 바꿨지만 학생을 내보내지 못했습니다(팀 id 를 모릅니다).");
+                    continue;
+                }
+
+                var out2 = await host.CallAsync("Remove-TeavelTeamStudent", new Dictionary<string, object?>
+                {
+                    ["GroupId"] = g.GroupId,
+                }, timeout: TimeSpan.FromMinutes(10), ct: ct).ConfigureAwait(false);
+
+                if (out2.Ok) { Ui.Ok(out2.Message); Ui.Details(out2.Details); }
+                else { Ui.Error(out2.Message); Ui.Details(out2.Details); }
+
+                Ui.Dim("      팀과 그 안의 파일·대화는 그대로 있습니다. 담당 선생님은 계속 볼 수 있습니다.");
+            }
             else
             {
                 Ui.Info("그냥 둡니다.");
@@ -612,13 +701,26 @@ public sealed class M365Flow
         return inventory;
     }
 
+    /// <summary>만든 날의 연도. 모르면 빈 문자열.</summary>
+    /// <remarks>
+    /// 지난 학년도 팀을 보관할 때 이름 앞에 붙일 연도다. 지금 연도가 아니라
+    /// <b>그 팀이 만들어진 연도</b>를 쓴다 — 재작년 것을 올해 연도로 붙이면 거짓이 된다.
+    /// </remarks>
+    private static string YearOf(ExistingGroup g)
+    {
+        var c = g.Created.Trim();
+        return c.Length >= 4 && int.TryParse(c[..4], out var y) && y is > 2000 and < 2100
+            ? y.ToString()
+            : "";
+    }
+
     // ──────────────────────────── 만들기 ────────────────────────────
 
     private async Task<int> CreateMissingAsync(
         M365Host host, IReadOnlyList<DeclaredGroup> groups,
         IReadOnlyList<ExistingGroup> inventory, CancellationToken ct)
     {
-        Ui.Title("⑤ 모자란 것 만들기");
+        Ui.Title("⑥ 모자란 것 만들기");
 
         var plan = TreeReconciler.Plan(groups, inventory);
         Ui.Info(TreeReconciler.Summarize(plan));
@@ -672,6 +774,14 @@ public sealed class M365Flow
         {
             Ui.Info("아무것도 만들지 않았습니다.");
             return 0;
+        }
+
+        // 여기서부터가 실제로 바꾸는 일이다. 팀 로그인은 여기까지 미뤄 두었다.
+        if (toCreate.Any(p => p.Declared.Kind == GroupKind.Team)
+            && !await EnsureTeamsAsync(host, ct).ConfigureAwait(false))
+        {
+            Ui.Warn("팀에 붙지 못해 만들기를 멈춥니다. 그룹은 그대로 있습니다.");
+            return 1;
         }
 
         var made = 0;
@@ -842,7 +952,13 @@ public sealed class M365Flow
     private async Task AddMembersAsync(
         M365Host host, IReadOnlyList<DeclaredGroup> groups, RosterResult roster, CancellationToken ct)
     {
-        Ui.Title("⑥ 학생 넣기");
+        Ui.Title("⑦ 학생 넣기");
+
+        if (!await EnsureTeamsAsync(host, ct).ConfigureAwait(false))
+        {
+            Ui.Warn("팀에 붙지 못해 학생을 넣지 못합니다. 팀은 그대로 있습니다.");
+            return;
+        }
 
         // 대조를 다시 한다 — 방금 만든 팀이 재고에 반영돼 있어야 하기 때문이다.
         var fresh = await ReadInventoryAsync(host, ct, quiet: true).ConfigureAwait(false);
@@ -946,13 +1062,14 @@ public sealed class M365Flow
               몇 학년 몇 반까지 있는지도 명단을 보면 알 수 있어, 따로 여쭙지 않아도 됩니다.
 
               엑셀·한셀·한글·csv 어느 것이든 됩니다. 양식은 맞추지 않으셔도 됩니다.
-
-                [1] 명단 파일이 있습니다
-                [2] 없습니다 — 팀만 만들겠습니다
         """);
 
-        var pick = (Ui.Ask("      고르세요 [1] ") ?? "1").Trim();
-        if (pick.Length == 0) pick = "1";
+        var pick = Ui.Choose("고르세요", new[]
+        {
+            new Ui.Choice("1", "[1] 명단 파일이 있습니다", "있", "가지고", "줄게", "여기"),
+            new Ui.Choice("2", "[2] 없습니다 — 팀만 만들겠습니다", "없", "나중", "팀만", "안가져", "몰라"),
+        }, "1");
+
         if (pick != "1")
         {
             Ui.Info("적어 두신 학교 구조대로 팀만 만들겠습니다.");

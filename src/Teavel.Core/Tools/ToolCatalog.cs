@@ -1,4 +1,4 @@
-namespace Teavel.Tools;
+﻿namespace Teavel.Tools;
 
 /// <summary>
 /// Teavel 이 할 줄 아는 일 전부. 여기 없는 일은 하지 않는다 — 그게 이 설계의 요점이다.
@@ -35,6 +35,76 @@ public static class ToolCatalog
     private static List<ToolSpec> Build() => new()
     {
         // ─────────────────────────── 엑셀 ───────────────────────────
+
+        // ── 학교 전체 (도구가 아니라 흐름) ──
+        //
+        // Module 이 "@flow" 인 것은 PowerShell 함수가 아니라 CLI 의 한 판을 가리킨다.
+        // 자가점검은 이것들을 건너뛴다(대조할 .psm1 이 없다).
+        new ToolSpec(
+            Id: "school.compose",
+            Title: "학교 그룹·Teams 구성하기",
+            Category: ToolCategory.School,
+            Description: "학교에 지금 있는 그룹과 팀을 살펴보고, 정리하고, 모자란 반 팀을 만들고, "
+                       + "명단으로 학생을 반에 넣습니다. 전역 관리자만 할 수 있습니다.",
+            Examples: new[]
+            {
+                "반 팀 만들어줘",
+                "올해 학급 팀 구성해야 해",
+                "학생들 반에 넣어줘",
+                "teams 구성하고 싶어",
+                "학교 그룹 정리해줘",
+            },
+            Parameters: Array.Empty<ToolParam>(),
+            Module: "@flow",
+            Function: "m365",
+            Mutating: true)
+        {
+            Aliases = new[] { "학급 팀", "수업 팀", "반 만들기", "구성원 배정", "m365 그룹", "팀 구성" },
+        },
+
+        new ToolSpec(
+            Id: "school.archive",
+            Title: "지난 학년도 팀 보관하기",
+            Category: ToolCategory.School,
+            Description: "작년에 쓰던 팀을 이름 앞에 연도를 붙여 보관하고 학생들을 내보냅니다. "
+                       + "팀과 그 안의 파일·대화는 그대로 남아, 나중에 찾아볼 수 있습니다.",
+            Examples: new[]
+            {
+                "작년 팀 백업해줘",
+                "지난 학년도 팀 정리하고 싶어",
+                "묵은 팀에서 학생들 빼줘",
+                "재작년 반 보관해줘",
+            },
+            Parameters: Array.Empty<ToolParam>(),
+            Module: "@flow",
+            Function: "m365.archive",
+            Mutating: true)
+        {
+            Aliases = new[] { "팀 백업", "팀 보관", "학년도 정리", "지난해 팀", "학생 내보내기" },
+        },
+
+        new ToolSpec(
+            Id: "school.find_teacher",
+            Title: "선생님 계정 찾기",
+            Category: ToolCategory.School,
+            Description: "이름으로 선생님의 학교 계정(로그인 아이디)을 찾아 줍니다. "
+                       + "학생 계정은 걸러 냅니다.",
+            Examples: new[]
+            {
+                "김하늘 선생님 계정 뭐야",
+                "이 선생님 아이디 찾아줘",
+                "선생님 계정 검색",
+            },
+            Parameters: new[]
+            {
+                new ToolParam("Name", ToolParamKind.Text, "성함", "찾으실 선생님 성함. 성만 넣으셔도 됩니다."),
+            },
+            Module: "@flow",
+            Function: "m365.teacher",
+            Mutating: false)
+        {
+            Aliases = new[] { "선생님 아이디", "교사 계정", "계정 찾기" },
+        },
 
         new ToolSpec(
             Id: "excel.list_sheets",

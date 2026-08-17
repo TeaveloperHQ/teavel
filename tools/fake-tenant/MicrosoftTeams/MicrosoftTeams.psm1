@@ -156,9 +156,18 @@ function Add-TeamUser {
     Import-Module ExchangeOnlineManagement
     Set-FakeMemberCount -GroupId $GroupId -Count $script:Members[$GroupId].Count
 }
+function Remove-TeamUser {
+    param($GroupId, $User, $Role)
+    if (-not $script:Members.ContainsKey($GroupId)) { return }
+    $script:Members[$GroupId] = @($script:Members[$GroupId] | Where-Object { $_ -notmatch "^$([regex]::Escape($User))\|" })
+    Save-FakeMembers
+    Import-Module ExchangeOnlineManagement
+    Set-FakeMemberCount -GroupId $GroupId -Count $script:Members[$GroupId].Count
+}
+
 function Get-Team { param($ErrorAction) @() }
 function Get-CsTenant { param($ErrorAction) [pscustomobject]@{ DisplayName = '가짜 학교' } }
 
 Export-ModuleMember -Function Connect-MicrosoftTeams, Disconnect-MicrosoftTeams,
-    New-Team, New-TeamChannel, Get-TeamChannel, Add-TeamUser, Get-TeamUser, Get-Team, Get-CsTenant,
+    New-Team, New-TeamChannel, Get-TeamChannel, Add-TeamUser, Get-TeamUser, Remove-TeamUser, Get-Team, Get-CsTenant,
     Get-CsOnlineUser
