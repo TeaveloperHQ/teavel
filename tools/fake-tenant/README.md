@@ -30,11 +30,33 @@ printf '3\n3\n3\ny\n' | teavel m365
 
 `TEAVEL_FAKE_STORE` 를 주지 않으면 프로세스마다 처음 상태로 돌아간다.
 
-## 걸리는 곳
+## 걸리는 곳 — 진짜 EXO 가 깔려 있으면 진다
 
-`Import-Module` 은 **판 번호가 아니라 `PSModulePath` 순서로** 고른다.
-진짜 `ExchangeOnlineManagement` 가 앞에 있으면 그쪽이 이긴다.
-리눅스에서 진짜를 깔아 둔 적이 있으면 `~/.local/share/powershell/Modules` 를 먼저 치워야 한다.
+**`PSModulePath` 를 앞세우는 것으로는 부족하다.** 가짜를 맨 앞에 두고 판 번호를 99.0.0 으로
+올려도 졌다. 순서 문제가 아니라 이런 일이 벌어진다.
+
+```
+가짜가 이김 →  New-UnifiedGroup 같은 개별 명령
+진짜가 이김 →  Connect-ExchangeOnline
+                  └─ 실행되면서 /tmp/tmpEXO_*.psm1 을 만들어 넣는다
+                     이게 나중에 들어와 가짜 명령들을 덮어쓴다
+```
+
+증상이 고약하다. 그룹을 만들려 하면 이렇게 나온다.
+
+```
+A server side error has occurred because of which the operation could not be completed.
+```
+
+가짜 모듈에는 없는 문구라 Teavel 버그로 보인다. **오류 details 의 경로가 `/tmp/tmpEXO_`
+로 시작하면 이 경우다.** 진짜 폴더를 잠시 옮겼다가 되돌리는 것이 확실하다.
+
+```bash
+REAL=~/.local/share/powershell/Modules/ExchangeOnlineManagement
+mv "$REAL" "$REAL.parked"
+# ... 실험 ...
+mv "$REAL.parked" "$REAL"      # 반드시 되돌린다
+```
 
 ## 채워 넣은 것
 
