@@ -85,14 +85,18 @@ public sealed class EdgeFacts
                 var email = Text(v, "user_name");
                 var display = Text(v, "name") ?? entry.Name;
 
-                // 학교·회사 계정인지는 <b>테넌트 id 가 붙어 있는지</b>로 본다.
+                // 학교·회사 계정인지는 <b>테넌트 id 가 개인용 공용 테넌트가 아닌지</b>로 본다.
                 //
-                // edge_account_type 을 먼저 썼다가 틀렸다 — 그 값은 "aad" 같은 글자가 아니라
-                // 숫자다. 글자로 읽으면 언제나 못 읽어서, 멀쩡히 학교 계정으로 로그인한
-                // 컴퓨터도 '로그인 안 됨' 으로 나온다. 테넌트 id 는 개인 계정에는 아예 없어서
-                // 이쪽이 훨씬 분명하다.
+                // 두 번 틀린 자리다. 처음에는 edge_account_type 을 "aad" 같은 글자로 읽었는데
+                // 그 값은 숫자였다(개인 계정에서 5 였다. 짐작한 2 가 아니다).
+                // 그다음에는 '테넌트 id 가 붙어 있으면 학교 계정' 으로 봤는데, 개인 계정에도
+                // 붙어 있다 — 마이크로소프트가 개인 계정 전부에 쓰는 공용 테넌트가 하나 있다.
+                // 그래서 hotmail 계정이 학교 계정으로 잡혀 '✓ 연결됨' 으로 나왔다.
+                //
+                // 학교 계정이면 그 학교의 테넌트 id 가 붙는다. 그것만 학교 것으로 센다.
                 var tenant = Text(v, "edge_account_tenant_id");
-                var work = tenant is not null || Number(v, "edge_account_type") == AadAccount;
+                var work = tenant is not null
+                        && !tenant.Equals(PersonalTenant, StringComparison.OrdinalIgnoreCase);
 
                 found.Add(new EdgeProfile(entry.Name, display, email, work && email is not null));
             }
@@ -107,16 +111,17 @@ public sealed class EdgeFacts
     /// <summary>학교 계정이 이어진 프로필. 없으면 null.</summary>
     public EdgeProfile? SchoolProfile() => Profiles().FirstOrDefault(p => p.IsWorkAccount);
 
-    /// <summary>edge_account_type 이 이 값이면 학교·회사(Entra ID) 계정이다.</summary>
-    private const int AadAccount = 2;
+    /// <summary>
+    /// 개인 Microsoft 계정이 모두 함께 쓰는 테넌트 id.
+    /// </summary>
+    /// <remarks>
+    /// 마이크로소프트가 정해 둔 값이라 계정마다 다르지 않다. hotmail·outlook 계정으로
+    /// 로그인해도 이 id 가 붙기 때문에, '테넌트 id 가 있으니 학교 계정' 으로 보면 안 된다.
+    /// </remarks>
+    private const string PersonalTenant = "9188040d-6c67-4c5b-b112-36a304b66dad";
 
     private static string? Text(JsonElement e, string name)
         => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
             ? (string.IsNullOrWhiteSpace(v.GetString()) ? null : v.GetString())
-            : null;
-
-    private static int? Number(JsonElement e, string name)
-        => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n)
-            ? n
             : null;
 }
