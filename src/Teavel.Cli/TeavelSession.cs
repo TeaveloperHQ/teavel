@@ -260,7 +260,7 @@ public sealed class TeavelSession : IAsyncDisposable
         var facts = new WindowsFacts(_registry, _paths);
         var flow = new AccountFlow(
             facts, new EdgeFacts(_paths), new OneDriveDetail(facts, _paths),
-            _tools, _proc, AssumeYes);
+            _tools, _proc, _registry, AssumeYes);
 
         return flow.RunAsync(ct);
     }

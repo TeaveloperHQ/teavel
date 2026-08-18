@@ -271,6 +271,48 @@ function Open-TeavelAccountSetting {
 
 <#
 .SYNOPSIS
+    학교 계정이 붙었는지만 짧게 알려준다. 아무것도 바꾸지 않는다.
+.DESCRIPTION
+    Get-TeavelAccountGuide 는 긴 안내문까지 만든다. 이 함수는 <b>지켜보기 위한 것</b>이라
+    붙었는지 여부와 테넌트 id 만 준다.
+
+    왜 필요한가 — 설정 창을 띄운 뒤 "다 하셨으면 Enter" 라고 하면, 선생님은 창 두 개를
+    오가며 언제 Enter 를 눌러야 하는지 스스로 판단해야 한다. 몇 초마다 이걸 불러
+    <b>붙는 순간 알아서 넘어가게</b> 하면 그 판단이 통째로 사라진다.
+
+    테넌트 id 는 원드라이브 백업 폴더를 정책으로 켤 때 필요하다.
+#>
+function Get-TeavelAccountState {
+    param()
+
+    $connected = $false
+    $tenant = ''
+    $accounts = New-Object System.Collections.Generic.List[string]
+
+    try {
+        foreach ($line in @(dsregcmd /status 2>$null)) {
+            if ($line -match '^\s*(?:AzureAdJoined|DomainJoined|WorkplaceJoined)\s*:\s*YES') { $connected = $true }
+
+            # 장치 연결이면 TenantId, 계정 추가면 WorkplaceTenantId 로 나온다.
+            if ($line -match '^\s*(?:Workplace)?TenantId\s*:\s*([0-9a-fA-F-]{36})') {
+                if (-not $tenant) { $tenant = $Matches[1] }
+            }
+            if ($line -match '\s*(?:WorkplaceUPN|Executing Account Name|UPN)\s*:\s*(\S+@\S+)') {
+                if (-not $accounts.Contains($Matches[1])) { $accounts.Add($Matches[1]) }
+            }
+        }
+    } catch { }
+
+    $d = New-Object System.Collections.Generic.List[string]
+    $d.Add("connected=$connected")
+    $d.Add("tenant=$tenant")
+    foreach ($a in $accounts) { $d.Add("account=$a") }
+
+    New-TeavelResult -Message $(if ($connected) { '연결됨' } else { '아직' }) -Details $d
+}
+
+<#
+.SYNOPSIS
     이 컴퓨터의 프린터 상태를 알려준다. 아무것도 바꾸지 않는다.
 #>
 function Get-PrinterStatus {
@@ -561,5 +603,6 @@ function Set-TeavelComputerName {
 
 Export-ModuleMember -Function `
     Get-TeavelSystemFacts, Get-TeavelWindowsInfo, Get-TeavelAccountGuide, Open-TeavelAccountSetting, `
+    Get-TeavelAccountState, `
     Get-TeavelComputerName, Set-TeavelComputerName, `
     Get-PrinterStatus, Set-TeavelDefaultPrinter, Add-TeavelPrinter
