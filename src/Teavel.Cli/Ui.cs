@@ -71,13 +71,20 @@ public static class Ui
         }
     }
 
-    /// <summary>한 줄 입력을 받는다. Ctrl+C·EOF 면 null.</summary>
+    /// <summary>
+    /// 한 줄 입력을 받는다. Ctrl+C·EOF 면 null.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ConsoleInput"/> 로 읽는다 — <c>Console.ReadLine()</c> 을 그대로 쓰면
+    /// 콘솔 코드 페이지에 따라 <b>선생님이 친 한글이 <c>?</c> 로 바뀌어</b> 도착한다.
+    /// 그러면 '점검' 같은 글자 그대로 견주는 명령까지 안 맞아 아무 말도 통하지 않는다.
+    /// </remarks>
     public static string? Ask(string prompt)
     {
         Console.ForegroundColor = ConsoleColor.White;
         Console.Write(prompt);
         Console.ForegroundColor = ConsoleColor.Gray;
-        var line = Console.ReadLine();
+        var line = ConsoleInput.ReadLine();
         Console.ResetColor();
         return line;
     }
@@ -138,22 +145,26 @@ public static class Ui
     }
 
     /// <summary>
-    /// 예/아니오를 묻는다. 그냥 Enter 는 '예'.
+    /// 예/아니오를 묻는다. 그냥 Enter 는 기본값(<paramref name="defaultYes"/>).
     /// </summary>
+    /// <param name="defaultYes">
+    /// 그냥 Enter 를 눌렀을 때의 답. <b>되돌릴 수 없는 일에는 false 를 준다</b> —
+    /// 파일을 지우는 물음에서 무심코 누른 Enter 가 '예' 가 되면 안 된다.
+    /// </param>
     /// <remarks>
     /// 입력이 아예 끊긴 경우(파이프로 돌리거나 Ctrl+D)는 <b>'아니오'</b> 로 본다.
     /// 사람이 Enter 를 누른 것과 아무도 없는 것은 다르다 — 아무도 없는데 파일을 바꾸는
     /// 작업을 진행하면 안 된다. 자동으로 넘기려면 --yes 를 쓰면 된다.
     /// </remarks>
-    public static bool Confirm(string question)
+    public static bool Confirm(string question, bool defaultYes = true)
     {
         while (true)
         {
-            var line = Ask($"{question} [Y/n] ");
+            var line = Ask($"{question} {(defaultYes ? "[Y/n]" : "[y/N]")} ");
             if (line is null) return false;          // EOF — 물어볼 사람이 없다
 
             var answer = line.Trim().ToLowerInvariant().Replace(" ", "");
-            if (answer.Length == 0) return true;
+            if (answer.Length == 0) return defaultYes;
 
             // 말로 답하는 경우도 받는다 — "응 해줘" · "아니 됐어" · "그만".
             if (answer is "y" or "yes" or "ㅇ" or "예" or "네" or "응" or "어" or "그래" or "좋아"

@@ -2,10 +2,20 @@
 using Teavel.Cli;
 
 // 한글이 깨지지 않도록. PowerShell 창의 기본 코드 페이지는 UTF-8 이 아닌 경우가 많다.
+//
+// **출력만 건드린다.** 예전에는 입력 쪽(Console.InputEncoding)도 UTF-8 로 바꿨는데,
+// 그것이 콘솔의 입력 코드 페이지를 65001 로 돌려 놓아 선생님이 친 한글이 프로그램에
+// 닿기도 전에 ? 로 바뀌었다. 화면에는 한글이 멀쩡히 나오니 원인을 짚기가 더 어려웠다 —
+// '점검' 처럼 글자를 그대로 견주는 명령까지 안 맞아 아무 말도 통하지 않았다.
+// 입력은 코드 페이지를 타지 않는 ConsoleInput 으로 읽는다.
 try
 {
     Console.OutputEncoding = new UTF8Encoding(false);
-    Console.InputEncoding = new UTF8Encoding(false);
+
+    // 파이프·파일로 들어오는 입력은 콘솔이 아니라 그냥 바이트다. 그쪽은 UTF-8 로 읽는다 —
+    // 콘솔 코드 페이지를 건드리지 않으므로 위의 사고가 나지 않는다.
+    if (Console.IsInputRedirected)
+        Console.SetIn(new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false)));
 }
 catch { /* 리디렉션된 콘솔에서는 설정할 수 없다 */ }
 
@@ -55,7 +65,9 @@ try
         "목록" or "list"              => Run(session.RunList),
         "모델" or "model"             => await session.RunModelAsync(cancel.Token),
         "설치" or "등록" or "install" => session.RunRegister(),
-        "제거" or "등록해제" or "uninstall" => session.RunUnregister(),
+        "등록해제" or "unregister"    => session.RunUnregister(),
+        // Windows 설정 > 앱 의 [제거] 도 이 자리로 들어온다(UninstallRegistration 이 그렇게 등록한다).
+        "삭제" or "지우기" or "제거" or "uninstall" or "remove" => session.RunUninstall(),
         "자가점검" or "selfcheck"     => await session.RunSelfCheckAsync(cancel.Token),
         "m365" or "그룹" or "teams"   => await session.RunM365Async(cancel.Token),
         "명단" or "roster"            => RosterFlow.Run(argument, assumeYes),
@@ -91,7 +103,10 @@ static void PrintHelp()
       teavel 선생님 <이름>  선생님 계정을 이름으로 찾습니다
 
       teavel 설치           어디서나 teavel 로 실행되게 등록합니다
-      teavel 제거           그 등록을 풉니다(프로그램은 지우지 않습니다)
+                            (Windows 설정 > 앱 목록에도 함께 올립니다)
+      teavel 삭제           Teavel 을 지웁니다 — 등록·설정·프로그램 파일까지
+                            내려받은 모델은 지울지 따로 여쭤봅니다
+      teavel 등록해제       등록만 풉니다(파일은 그대로 둡니다)
 
       teavel "2반 엑셀 다 합쳐줘"     한 번만 실행하고 끝냅니다
 

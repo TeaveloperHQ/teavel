@@ -115,6 +115,15 @@ public static class Morphemes
                 var model = KiwiAssets.FindModel();
                 if (model is null) { Why = "형태소 분석기가 아직 없습니다."; return null; }
 
+                // 모델은 있는데 분석기가 없는 경우를 따로 말한다. 그냥 두면
+                // DllNotFoundException 의 영문 메시지가 그대로 교사 화면에 나가서
+                // 무엇이 모자란 것인지 알 길이 없다.
+                if (!KiwiAssets.HasNative(model))
+                {
+                    Why = "말뭉치는 있는데 분석기가 없습니다. '모델' 을 다시 실행하면 마저 받습니다.";
+                    return null;
+                }
+
                 // FindModel 은 이미 '폴더' 를 준다. 여기서 또 GetDirectoryName 을 하면
                 // 부모로 올라가 네이티브를 못 찾는다 — 한 번 그렇게 당했다.
                 KiwiNative.LookAlsoIn(model);
@@ -161,11 +170,59 @@ public static class KiwiAssets
     /// 판마다 들어 있는 파일이 다르다 — 0.23 의 CoNg 모델은 <c>cong.mdl</c> 을 쓰고
     /// 옛 판은 <c>sj.morph</c> 를 쓴다. <c>default.dict</c> 는 어느 판에나 있어 이것으로 알아본다.
     /// </remarks>
-    private const string Marker = "default.dict";
+    public const string Marker = "default.dict";
 
     /// <summary>Teavel 이 받아 둘 자리.</summary>
     public static string DefaultDirectory(ISystemPaths paths)
         => Path.Combine(paths.DataDirectory, ModelDirName);
+
+    /// <summary>공유 라이브러리인지. libkiwi.so · libkiwi.so.0.23.2 · kiwi.dll 등.</summary>
+    public static bool IsSharedLibrary(string name)
+        => name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith(".dylib", StringComparison.OrdinalIgnoreCase)
+        || name.Contains(".so", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// <b>정말 쓸 수 있는</b> 모델 폴더를 찾는다. 없으면 null.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="FindModel"/> 과 달리 <b>분석기(네이티브)까지 있는지</b> 본다.
+    /// 모델만 있고 네이티브가 없으면 쓸 수 없는데, 그것을 '갖춰짐' 으로 세면
+    /// 다시 받으라고 해도 이미 있다며 아무것도 하지 않는다 — 스스로는 못 낫는 상태가 된다.
+    /// 실제로 네이티브 내려받기가 끊겼을 때 그렇게 됐다.
+    /// </para>
+    /// <para>
+    /// 네이티브는 모델 폴더 옆에 있을 수도 있고, 배포본처럼 exe 옆에 있을 수도 있다.
+    /// <see cref="KiwiNative"/> 가 두 곳을 다 보므로 여기서도 두 곳을 다 본다.
+    /// </para>
+    /// </remarks>
+    public static string? FindUsable(ISystemPaths? paths = null)
+    {
+        var model = FindModel(paths);
+        return model is not null && HasNative(model) ? model : null;
+    }
+
+    /// <summary>분석기(공유 라이브러리)가 이 폴더나 exe 폴더에 있는지.</summary>
+    public static bool HasNative(string modelDirectory)
+    {
+        foreach (var dir in new[]
+                 {
+                     modelDirectory,
+                     Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory,
+                     AppContext.BaseDirectory,
+                 })
+        {
+            try
+            {
+                if (!Directory.Exists(dir)) continue;
+                if (Directory.EnumerateFiles(dir, "*kiwi*").Any(f => IsSharedLibrary(Path.GetFileName(f))))
+                    return true;
+            }
+            catch (IOException) { }
+        }
+        return false;
+    }
 
     /// <summary>모델 폴더를 찾는다. 없으면 null.</summary>
     public static string? FindModel(ISystemPaths? paths = null)

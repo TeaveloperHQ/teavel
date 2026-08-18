@@ -23,6 +23,7 @@ public sealed class TeavelSession : IAsyncDisposable
     private readonly McpHub _mcp;
     private readonly PathRegistration _path;
     private readonly ExplorerRegistration _explorer;
+    private readonly UninstallRegistration _uninstall;
 
     /// <summary>확인 없이 바로 실행할지(--yes).</summary>
     public bool AssumeYes { get; init; }
@@ -53,9 +54,22 @@ public sealed class TeavelSession : IAsyncDisposable
         _mcp = new McpHub(_apps, _installer);
         _path = new PathRegistration(registry, _paths);
         _explorer = new ExplorerRegistration(registry, _paths);
+        _uninstall = new UninstallRegistration(registry);
 
         var modelPath = LocalLlmIntentRouter.FindModel(_paths);
         _llm = modelPath is null ? null : new LocalLlmIntentRouter(modelPath);
+
+        // 모델을 처음 읽는 데 GPU 없는 교사 PC 에서 수십 초가 걸린다. 그동안 아무 말도
+        // 없으면 <b>멈춘 것으로 보인다</b> — llama.cpp 이 쏟아내는 진단문마저 껐기 때문에
+        // 화면이 정말 아무것도 안 움직인다. 한 줄이라도 먼저 띄운다.
+        if (_llm is not null)
+            _llm.OnLoading = note =>
+            {
+                // '> ' 프롬프트 바로 뒤라 줄을 바꾸지 않으면 교사가 친 말에 붙어 나온다.
+                Console.WriteLine();
+                Ui.Dim($"      {note}");
+            };
+
         _router = new LayeredIntentRouter(new KeywordIntentRouter(), _llm);
     }
 
@@ -339,6 +353,7 @@ public sealed class TeavelSession : IAsyncDisposable
               선생님 <이름> 선생님 계정을 찾습니다
 
               자가점검     Teavel 자신이 온전한지 확인합니다
+              삭제        Teavel 을 이 컴퓨터에서 지웁니다
               나가기       끝냅니다
 
               그 밖에는 하고 싶은 일을 그냥 적으시면 됩니다. 예: 엑셀 다 합쳐줘
@@ -702,9 +717,10 @@ public sealed class TeavelSession : IAsyncDisposable
 
         Ui.Fix("등록", _path.Register(exe));
         Ui.Fix("탐색기 우클릭 메뉴", _explorer.Register(exe));
+        Ui.Fix("Windows 설정 목록", _uninstall.Register(exe, Version));
     }
 
-    /// <summary>PATH 와 탐색기 우클릭 메뉴에 등록한다.</summary>
+    /// <summary>PATH·탐색기 우클릭 메뉴·Windows 설정 목록에 등록한다.</summary>
     public int RunRegister()
     {
         Ui.Title("Teavel 등록");
@@ -714,8 +730,16 @@ public sealed class TeavelSession : IAsyncDisposable
 
         Ui.Fix("PowerShell 어디서나 실행", _path.Register(exe));
         Ui.Fix("탐색기 우클릭 메뉴", _explorer.Register(exe));
+
+        // 설정 앱 목록에 올리는 것도 등록의 일부다. 이것이 빠져 있으면 나중에 지우려는
+        // 선생님이 설정 > 앱 을 열었을 때 Teavel 이 아예 보이지 않는다.
+        Ui.Fix("Windows 설정 목록", _uninstall.Register(exe, Version));
         return 0;
     }
+
+    /// <summary>보여 줄 판 번호.</summary>
+    private static string Version
+        => System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "1.0.0";
 
     /// <summary>
     /// 등록을 풀고 Teavel 이 남긴 설정도 치운다. 프로그램 파일 자체는 지우지 않는다.
@@ -730,6 +754,7 @@ public sealed class TeavelSession : IAsyncDisposable
         Ui.Title("등록 해제");
         Ui.Fix("PowerShell 등록 해제", _path.Unregister());
         Ui.Fix("탐색기 우클릭 메뉴 해제", _explorer.Unregister());
+        Ui.Fix("Windows 설정 목록에서 내리기", _uninstall.Unregister());
 
         // 설정·표식 정리. models 폴더는 건드리지 않는다.
         var removed = 0;
@@ -749,15 +774,147 @@ public sealed class TeavelSession : IAsyncDisposable
         if (removed > 0) Ui.Ok($"남아 있던 설정 {removed}개를 치웠습니다.");
 
         Console.WriteLine();
-        Ui.Info("이제 프로그램 폴더를 지우시면 완전히 제거됩니다.");
+        Ui.Info("등록만 풀었습니다. 프로그램과 내려받은 모델은 그대로 있습니다.");
+        Ui.Dim("      파일까지 다 지우시려면 'teavel 삭제' 를 실행하세요.");
 
-        var models = Path.Combine(_paths.DataDirectory, "models");
-        if (Directory.Exists(models))
+        return 0;
+    }
+
+    // ─────────────────────────────── 지우기 ───────────────────────────────
+
+    /// <summary>
+    /// Teavel 을 이 PC 에서 지운다 — 등록·설정·내려받은 것·프로그램 파일까지.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 설치 프로그램 없이 exe 하나로 받는 방식이라, 지우는 것도 우리가 해야 한다.
+    /// Windows 설정 &gt; 앱 의 [제거] 도 결국 이 명령을 부른다
+    /// (<see cref="UninstallRegistration"/> 이 그렇게 등록해 둔다).
+    /// </para>
+    /// <para>
+    /// <b>무엇을 지울지 다 보여 주고 지운다.</b> 남의 PC 에서 파일을 지우는 일이다.
+    /// 내려받은 모델(1GB 남짓)은 다시 받으려면 오래 걸리므로 <b>따로 여쭙는다</b> —
+    /// 자리만 옮기려는 분에게 1GB 를 다시 받게 하는 것은 손해다.
+    /// </para>
+    /// </remarks>
+    public int RunUninstall() => RunUninstall(out _);
+
+    /// <param name="cancelled">
+    /// 교사가 그만두었으면 true. 대화 모드에서 이것을 보고 <b>끝낼지 이어 갈지</b> 정한다 —
+    /// 취소했는데도 창이 닫히면 그것대로 놀랄 일이다.
+    /// </param>
+    /// <inheritdoc cref="RunUninstall()"/>
+    public int RunUninstall(out bool cancelled)
+    {
+        cancelled = false;
+        Ui.Title("Teavel 지우기");
+
+        var exe = TeavelExe.Find(_paths).Path;
+        var settings = TeavelRemoval.Settings(_paths);
+        var downloads = TeavelRemoval.Downloads(_paths);
+        var program = TeavelRemoval.Program(exe);
+
+        Ui.Dim("      지울 것을 먼저 보여 드립니다.");
+        Console.WriteLine();
+
+        Ui.Plain("      등록");
+        Ui.Dim("        PowerShell 등록 · 탐색기 우클릭 메뉴 · Windows 설정 목록");
+
+        if (settings.Count > 0)
         {
-            Ui.Dim($"      언어 모델은 남겨 두었습니다: {models}");
-            Ui.Dim("      다시 설치하면 그대로 씁니다. 지우시려면 이 폴더를 직접 지우세요.");
+            Console.WriteLine();
+            Ui.Plain($"      설정  ({_paths.DataDirectory})");
+            foreach (var s in settings) Ui.Dim($"        {s.Title}");
         }
 
+        if (program.Count > 0)
+        {
+            Console.WriteLine();
+            Ui.Plain($"      프로그램  ({Path.GetDirectoryName(exe)})");
+            foreach (var p in program) Ui.Dim($"        {p.Title}  {p.Size}");
+        }
+
+        if (downloads.Count > 0)
+        {
+            Console.WriteLine();
+            Ui.Plain("      내려받아 둔 것 — 따로 여쭙겠습니다");
+            foreach (var d in downloads) Ui.Dim($"        {d.Title}  {d.Size}");
+
+            // 생기부 도우미가 받아 둔 모델을 빌려 쓰고 있을 수 있다. 그것은 남의 것이라
+            // 우리가 지울 것이 아니다 — 여기 적힌 것은 Teavel 이 제 자리에 받은 것뿐이다.
+            Ui.Dim("        (다른 앱이 받아 둔 것은 건드리지 않습니다)");
+        }
+
+        Console.WriteLine();
+
+        // 되돌릴 수 없는 일이라 그냥 Enter 는 '아니오' 다. '제거' 라고 쳤는데
+        // 무심코 누른 Enter 로 프로그램이 지워지면 안 된다.
+        if (!AssumeYes && !Ui.Confirm("      정말 지울까요?", defaultYes: false))
+        {
+            cancelled = true;
+            Ui.Info("그만두었습니다. 아무것도 지우지 않았습니다.");
+            return 0;
+        }
+
+        // 모델은 따로 묻는다. --yes 로 들어왔으면(설정 앱의 조용한 제거) 함께 지운다.
+        var alsoDownloads = downloads.Count > 0
+            && (AssumeYes
+                || Ui.Confirm(
+                    $"      내려받은 것({downloads.Sum(d => d.Bytes) / 1024 / 1024:N0}MB)도 지울까요?",
+                    defaultYes: false));
+
+        Console.WriteLine();
+        Ui.Fix("PowerShell 등록 해제", _path.Unregister());
+        Ui.Fix("탐색기 우클릭 메뉴 해제", _explorer.Unregister());
+        Ui.Fix("Windows 설정 목록에서 내리기", _uninstall.Unregister());
+
+        // 언어 모델을 붙잡고 있으면 파일이 지워지지 않는다. 먼저 놓는다.
+        _llm?.Dispose();
+
+        var toDelete = new List<RemovalItem>(settings);
+        if (alsoDownloads) toDelete.AddRange(downloads);
+
+        var (removed, failed) = TeavelRemoval.Delete(toDelete);
+        if (removed > 0) Ui.Ok($"{removed}개를 지웠습니다.");
+        foreach (var f in failed) Ui.Warn($"지우지 못했습니다: {f}");
+
+        if (!alsoDownloads && downloads.Count > 0)
+        {
+            Ui.Dim($"      내려받은 것은 남겨 두었습니다: {_paths.DataDirectory}");
+            Ui.Dim("      다시 설치하시면 그대로 씁니다.");
+        }
+
+        // 프로그램 파일은 마지막이다 — 지금 그 파일로 돌고 있기 때문에 우리가 끝난
+        // 뒤에 지워져야 한다.
+        Console.WriteLine();
+        if (program.Count == 0)
+        {
+            Ui.Info("프로그램 파일은 찾지 못했습니다. 받아 두신 teavel.exe 를 직접 지워 주세요.");
+        }
+        else
+        {
+            var folder = Path.GetDirectoryName(Path.GetFullPath(exe));
+
+            // 비었을 때만 치울 폴더들. 프로그램 폴더에 선생님 파일이 섞여 있으면 그대로 남는다.
+            var emptyFolders = new List<string>();
+            if (folder is { Length: > 0 }) emptyFolders.Add(folder);
+            if (alsoDownloads) emptyFolders.Add(_paths.DataDirectory);
+
+            if (TeavelRemoval.ScheduleDelete(program, emptyFolders))
+            {
+                Ui.Ok("프로그램 파일은 이 창이 닫힌 뒤 몇 초 안에 지워집니다.");
+                Ui.Dim($"      {folder}");
+                Ui.Dim("      그 폴더에 다른 파일이 있으면 폴더는 남습니다 — 선생님 파일은 건드리지 않습니다.");
+            }
+            else
+            {
+                Ui.Warn("프로그램 파일은 자동으로 지우지 못했습니다.");
+                Ui.Dim($"      이 폴더를 직접 지워 주세요: {folder}");
+            }
+        }
+
+        Console.WriteLine();
+        Ui.Info("그동안 고마웠습니다.");
         return 0;
     }
 
@@ -795,6 +952,18 @@ public sealed class TeavelSession : IAsyncDisposable
         else
         {
             Ui.Warn("PATH 에 등록돼 있지 않습니다. 'teavel 설치' 로 등록하면 어디서나 teavel 만 쳐도 됩니다.");
+        }
+
+        // 지울 길이 있는지도 확인해 준다. 이것이 빠져 있으면 나중에 지우려는 선생님이
+        // 설정 > 앱 을 열었을 때 Teavel 이 목록에 없어서 방법을 못 찾는다.
+        if (_uninstall.IsRegistered())
+        {
+            Ui.Ok("Windows 설정 > 앱 목록에서 지울 수 있습니다.");
+        }
+        else
+        {
+            Ui.Warn("Windows 설정 > 앱 목록에 없습니다. 거기서는 지우지 못합니다.");
+            Ui.Dim("      'teavel 설치' 로 등록하면 목록에 올라갑니다. ('teavel 삭제' 로는 지금도 지울 수 있습니다)");
         }
 
         // 말을 알아듣는 데 쓰는 것은 두 겹이다. 하나만 보고하면 교사가
@@ -874,7 +1043,15 @@ public sealed class TeavelSession : IAsyncDisposable
             if (line is "자가점검" or "selfcheck") { await RunSelfCheckAsync(ct).ConfigureAwait(false); continue; }
             if (line is "모델" or "model") { await RunModelAsync(ct).ConfigureAwait(false); continue; }
             if (line is "설치" or "등록" or "install") { RunRegister(); continue; }
-            if (line is "제거" or "등록해제" or "uninstall") { RunUnregister(); continue; }
+            if (line is "등록해제" or "unregister") { RunUnregister(); continue; }
+            if (line is "삭제" or "지우기" or "제거" or "uninstall" or "remove")
+            {
+                // 정말 지웠으면 대화를 이어 갈 까닭이 없다 — 프로그램 파일이 곧
+                // 사라지므로 여기서 나간다. 그만두었으면 하던 대로 이어 간다.
+                RunUninstall(out var stopped);
+                if (!stopped) return 0;
+                continue;
+            }
             if (line is "도움말" or "help" or "?") { ShowHelp(); continue; }
 
             // 뒤에 값이 붙는 것들.

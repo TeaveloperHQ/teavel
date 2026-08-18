@@ -44,6 +44,17 @@ public sealed class LocalLlmIntentRouter : IIntentRouter, IDisposable
     /// <summary>쓰고 있는 모델 파일 경로.</summary>
     public string ModelPath => _modelPath;
 
+    /// <summary>
+    /// 오래 걸리는 준비를 시작할 때 알린다. 화면에 한 줄 띄우는 데 쓴다.
+    /// </summary>
+    /// <remarks>
+    /// GPU 없는 교사 PC 에서 1GB 모델을 처음 읽는 데 수십 초가 걸린다. 그동안 화면에
+    /// 아무 변화가 없으면 <b>프로그램이 멈춘 것으로 보인다</b> — llama.cpp 의 진단문까지
+    /// 껐으니 정말로 아무것도 움직이지 않는다. 기다리는 중이라고 말해 주는 것만으로
+    /// '고장' 이 '기다림' 이 된다.
+    /// </remarks>
+    public Action<string>? OnLoading { get; set; }
+
     /// <summary>도구 고르기 프롬프트에서 캐시된 토큰 수. 적재 전에는 0.</summary>
     public int CachedTokens => _picker?.CachedTokens ?? 0;
 
@@ -320,6 +331,9 @@ public sealed class LocalLlmIntentRouter : IIntentRouter, IDisposable
             if (!File.Exists(_modelPath))
                 throw new FileNotFoundException($"언어 모델 파일을 찾지 못했습니다: {_modelPath}");
 
+            var mb = new FileInfo(_modelPath).Length / 1024 / 1024;
+            OnLoading?.Invoke($"언어 모델을 읽는 중입니다({mb:N0}MB). 처음 한 번만 걸립니다…");
+
             _params = ContextParams(_contextSize);
             _weights = LLamaWeights.LoadFromFile(_params);
         }
@@ -337,7 +351,13 @@ public sealed class LocalLlmIntentRouter : IIntentRouter, IDisposable
         await _loadGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            return _picker ??= new LlmSession(
+            if (_picker is not null) return _picker;
+
+            // 도구 목록(수백 토큰)을 한 번 처리해 두는 자리다. 모델 읽기만큼은 아니어도
+            // 몇 초가 걸리므로 여기서도 말없이 멈춰 있지 않게 한다.
+            OnLoading?.Invoke("말귀를 준비하는 중입니다…");
+
+            return _picker = new LlmSession(
                 _weights!, ContextParams(TeavelModelConfig.PickerContextSize), BuildPickerPrompt());
         }
         finally { _loadGate.Release(); }
