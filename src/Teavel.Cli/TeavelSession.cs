@@ -490,6 +490,10 @@ public sealed class TeavelSession : IAsyncDisposable
                 await RunAccountAsync(ct).ConfigureAwait(false);
                 return;
 
+            case "remove":
+                RunUninstall();
+                return;
+
             case "model":
                 await RunModelAsync(ct).ConfigureAwait(false);
                 return;

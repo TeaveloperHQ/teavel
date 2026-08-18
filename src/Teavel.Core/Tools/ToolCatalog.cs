@@ -112,7 +112,29 @@ public static class ToolCatalog
             Function: "uninstall",
             Mutating: true)
         {
-            Aliases = new[] { "제거", "등록 해제", "되돌리기" },
+            // '제거' 는 여기 두지 않는다 — 그 말로 부르면 아래 teavel.remove(정말 지우기)로 가야 한다.
+            // 같은 말이 두 곳에 있으면 말로 부를 때와 명령으로 칠 때가 서로 다른 일을 한다.
+            Aliases = new[] { "등록 해제", "등록해제", "되돌리기", "path 에서 빼기" },
+        },
+
+        new ToolSpec(
+            Id: "teavel.remove",
+            Title: "Teavel 지우기",
+            Category: ToolCategory.Setup,
+            Description: "Teavel 을 이 컴퓨터에서 지웁니다 — 등록·설정·프로그램 파일까지. "
+                       + "내려받아 둔 언어 모델과 형태소 분석기는 지울지 따로 물어봅니다.",
+            Examples: new[]
+            {
+                "teavel 지워줘",
+                "이거 삭제하고 싶어",
+                "프로그램 없애줘",
+            },
+            Parameters: Array.Empty<ToolParam>(),
+            Module: "@flow",
+            Function: "remove",
+            Mutating: true)
+        {
+            Aliases = new[] { "삭제", "제거", "지우기", "완전 삭제", "없애기" },
         },
 
         new ToolSpec(
