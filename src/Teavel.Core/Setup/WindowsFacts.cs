@@ -19,6 +19,36 @@ public sealed class WindowsFacts
         _paths = paths;
     }
 
+    // ─────────────────────────── Windows 자신 ───────────────────────────
+
+    private const string CurrentVersionKey = @"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+
+    /// <summary>"22H2" 같은 판. 못 읽으면 null.</summary>
+    public string? WindowsVersion
+        => _reg.ReadString(RegistryRoot.LocalMachine, CurrentVersionKey, "DisplayVersion");
+
+    /// <summary>빌드 번호. 못 읽으면 0.</summary>
+    public int WindowsBuild
+        => int.TryParse(_reg.ReadString(RegistryRoot.LocalMachine, CurrentVersionKey, "CurrentBuild"), out var b)
+            ? b
+            : 0;
+
+    /// <summary>EditionID — "Core"(Home) · "Professional" · "Education" 등.</summary>
+    public string? WindowsEdition
+        => _reg.ReadString(RegistryRoot.LocalMachine, CurrentVersionKey, "EditionID");
+
+    /// <summary>
+    /// Enterprise·Education 판인지. 이 판들은 지원 기간이 1년 더 길다.
+    /// </summary>
+    public bool IsBusinessEdition
+        => WindowsEdition is { } e
+        && (e.StartsWith("Enterprise", StringComparison.OrdinalIgnoreCase)
+         || e.StartsWith("Education", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>보안 패치를 아직 받는 판인지.</summary>
+    public WindowsSupportInfo Support(DateOnly today)
+        => WindowsSupport.Evaluate(WindowsVersion, WindowsBuild, IsBusinessEdition, today);
+
     // ─────────────────────────── OneDrive ───────────────────────────
 
     /// <summary>업무·학교 계정(Business1)이 연결돼 있으면 그 동기화 폴더 경로. 없으면 null.</summary>

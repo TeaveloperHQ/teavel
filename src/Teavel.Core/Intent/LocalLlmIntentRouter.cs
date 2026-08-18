@@ -365,7 +365,7 @@ public sealed class LocalLlmIntentRouter : IIntentRouter, IDisposable
 
     /// <summary>
     /// 인자 뽑기용 문맥은 <b>실제로 필요할 때만</b> 만든다.
-    /// 인자가 전부 경로인 도구(프린터 목록, 파일 살펴보기 등)는 이 단계를 아예 건너뛰므로,
+    /// 인자가 전부 경로인 도구(파일 살펴보기 등)는 이 단계를 아예 건너뛰므로,
     /// 미리 만들어 두면 쓰지도 않을 KV 캐시를 계속 물고 있게 된다.
     /// </summary>
     private async Task<LlmSession> FillerAsync(CancellationToken ct)

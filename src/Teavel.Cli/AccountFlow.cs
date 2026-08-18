@@ -389,10 +389,10 @@ public sealed class AccountFlow
 
             if (_assumeYes || !Ui.Confirm("      끌까요?", defaultYes: false)) return;
 
-            if (!IsAdministrator())
+            if (!Elevation.IsElevated)
             {
                 Ui.Warn("끄는 것도 관리자 권한이 필요합니다.");
-                Ui.Dim("      PowerShell 을 [관리자 권한으로 실행] 한 뒤 다시 해 주세요.");
+                Ui.Dim("      '계정' 을 관리자 권한으로 다시 실행해 주세요.");
                 return;
             }
 
@@ -418,10 +418,14 @@ public sealed class AccountFlow
 
         Console.WriteLine();
 
-        if (!IsAdministrator())
+        if (!Elevation.IsElevated)
         {
             Ui.Warn("이건 컴퓨터 전체 설정이라 관리자 권한이 필요합니다.");
-            Ui.Dim("      PowerShell 을 [관리자 권한으로 실행] 한 뒤 '계정' 을 다시 실행해 주세요.");
+
+            Ui.Dim(Elevation.CanElevate
+                ? "      '계정' 을 관리자 권한으로 다시 실행하시면 켜 드립니다 — 승인 창 한 번이면 됩니다."
+                : "      이 계정은 이 컴퓨터의 관리자가 아니라 켤 수 없습니다.");
+
             Ui.Dim("      지금은 넘어가고, 원드라이브는 아래에서 손으로 로그인하셔도 됩니다.");
             return;
         }
@@ -466,19 +470,6 @@ public sealed class AccountFlow
     private bool AutoSignInOn()
         => _reg.ReadDword(RegistryRoot.LocalMachine, OneDrivePolicyKey, "SilentAccountConfig") == 1;
 
-    /// <summary>관리자 권한으로 돌고 있는지.</summary>
-    private static bool IsAdministrator()
-    {
-        if (!OperatingSystem.IsWindows()) return false;
-
-        try
-        {
-            using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
-            return new System.Security.Principal.WindowsPrincipal(identity)
-                .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
-        }
-        catch { return false; }
-    }
 
     /// <summary>돌고 있으면 끄고 다시 띄운다.</summary>
     private void Restart(string exe)

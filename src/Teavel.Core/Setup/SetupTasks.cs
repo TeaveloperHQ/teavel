@@ -7,17 +7,24 @@ namespace Teavel.Setup;
 /// <summary>세팅 항목이 속한 단계. 교사에게 보여줄 때 이 순서로 묶는다.</summary>
 public enum SetupStage
 {
-    /// <summary>① 계정 — 여기가 되면 나머지가 줄줄이 딸려 온다.</summary>
+    /// <summary>
+    /// ① Windows 자신 — 여기가 묵으면 <b>아래가 다 막힌다.</b>
+    /// </summary>
+    /// <remarks>
+    /// 학교 컴퓨터는 업체가 만들어 둔 이미지를 복사해 온 것이라 만든 날에 멈춰 있다.
+    /// 묵은 Windows 에서는 학교 계정을 잇는 일부터 실패하는데, 그 까닭이 화면에 나오지
+    /// 않아서 선생님은 계정이 잘못된 줄 안다. 그래서 계정보다 앞에 둔다.
+    /// </remarks>
+    Windows,
+
+    /// <summary>② 계정 — 여기가 되면 나머지가 줄줄이 딸려 온다.</summary>
     Account,
 
-    /// <summary>② 자료 지키기 — 자료를 잃지 않게.</summary>
+    /// <summary>③ 자료 지키기 — 자료를 잃지 않게.</summary>
     Backup,
 
-    /// <summary>③ 프로그램 — 쓸 것들이 깔려 있게.</summary>
+    /// <summary>④ 프로그램 — 쓸 것들이 깔려 있게.</summary>
     Programs,
-
-    /// <summary>④ 인쇄.</summary>
-    Printing,
 }
 
 /// <summary>
@@ -26,7 +33,7 @@ public enum SetupStage
 /// 교사 PC 는 대개 로컬 계정으로만 쓰여서, Windows 에 학교 계정이 붙어 있지 않다.
 /// 그것부터 해결하지 않으면 원드라이브·아웃룩·팀즈가 저마다 로그인을 요구하고
 /// 선생님은 같은 비밀번호를 네 번 넣다가 포기한다.
-/// 그래서 ① 계정 → ② 자료 지키기 → ③ 프로그램 → ④ 인쇄 순으로 세워 둔다.
+/// 그래서 ① Windows → ② 계정 → ③ 자료 지키기 → ④ 프로그램 순으로 세워 둔다.
 /// </summary>
 public sealed class SetupCatalog
 {
@@ -48,25 +55,25 @@ public sealed class SetupCatalog
     {
         _tasks = new List<(SetupStage, ISetupTask)>
         {
-            // ① 계정 — 이 하나가 나머지의 뿌리다.
+            // ① Windows 자신이 맨 앞이다. 여기가 막혀 있으면 아래 것을 아무리 붙들어도 안 된다.
+            (SetupStage.Windows, new WindowsUpdateTask(facts, runner, proc)),
+
+            // ② 계정 — 이 하나가 나머지의 뿌리다.
             (SetupStage.Account, new ComputerNameTask(runner)),
             (SetupStage.Account, new WindowsAccountTask(runner)),
             (SetupStage.Account, new OneDriveSignInTask(facts, proc)),
             (SetupStage.Account, new OfficeSignInTask(facts, proc, paths)),
             (SetupStage.Account, new OutlookAccountTask(facts, proc)),
 
-            // ② 자료 지키기
+            // ③ 자료 지키기
             (SetupStage.Backup, new OneDriveKnownFoldersTask(facts, proc)),
 
-            // ③ 프로그램
+            // ④ 프로그램
             (SetupStage.Programs, new OfficeInstalledTask(facts, proc)),
             (SetupStage.Programs, new TeamsInstalledTask(facts, proc)),
             (SetupStage.Programs, new TodoInstalledTask(facts, proc)),
             // 러너는 '깔렸나' 로 끝나지 않는다 — 활성화까지 돼야 학생이 들어올 수 있다.
             (SetupStage.Programs, new RunnerActivationTask(apps, installer, proc, announce)),
-
-            // ④ 인쇄
-            (SetupStage.Printing, new PrinterDefaultTask(runner)),
         };
     }
 
@@ -90,10 +97,10 @@ public sealed class SetupCatalog
     /// <summary>단계 이름.</summary>
     public static string StageName(SetupStage stage) => stage switch
     {
-        SetupStage.Account => "① 이 컴퓨터와 계정 — 먼저 정해 둘 것",
-        SetupStage.Backup => "② 자료 지키기 — 잃어버리지 않게",
-        SetupStage.Programs => "③ 프로그램 — 쓸 것들 갖추기",
-        SetupStage.Printing => "④ 인쇄",
+        SetupStage.Windows => "① Windows 부터 — 여기가 묵으면 아래가 다 막힙니다",
+        SetupStage.Account => "② 이 컴퓨터와 계정 — 먼저 정해 둘 것",
+        SetupStage.Backup => "③ 자료 지키기 — 잃어버리지 않게",
+        SetupStage.Programs => "④ 프로그램 — 쓸 것들 갖추기",
         _ => stage.ToString(),
     };
 }
@@ -123,7 +130,15 @@ public abstract class WingetInstallTask : ISetupTask
         if (check.State == CheckState.Ok) return FixResult.AlreadyOk(check.Summary);
         if (check.State == CheckState.NotApplicable) return FixResult.NotSupported(check.Summary);
 
-        if (!Proc.Exists("winget"))
+        // 관리자 권한으로 돌고 있으면 winget 을 부르지 않는다.
+        //
+        // 관리자 + 숨김 콘솔 조합에서 winget 은 <b>오류를 내지도 끝나지도 않고 그대로 선다</b>
+        // (실사용에서 겪었다). 우리는 창을 숨기고(CreateNoWindow) 표준 출력을 가로채므로
+        // 정확히 그 조합이다. 제한 시간이 있어 영영 매달리지는 않지만, 그동안 화면은 멈춘 채다.
+        //
+        // Teavel 이 스스로 권한을 올릴 수 있게 되면서 이 자리에 닿기가 훨씬 쉬워졌다.
+        // 그래서 승격된 창에서는 Store 로 보낸다 — 어차피 [설치] 한 번 누르면 되는 길이다.
+        if (Elevation.IsElevated || !Proc.Exists("winget"))
         {
             // "Store 에서 앱 설치 관리자를 먼저 설치하세요" 는 같은 벽을 한 번 더 세우는 것이다.
             // 어차피 Store 를 열어야 한다면 우리가 열고 찾아 주는 편이 낫다 —

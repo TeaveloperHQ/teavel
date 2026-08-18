@@ -45,6 +45,17 @@ public enum FixOutcome
     /// </summary>
     ManualStepStarted,
 
+    /// <summary>
+    /// 관리자 권한이 있어야 함 — <b>고칠 수 없는 것이 아니라 권한만 올리면 되는 것</b>이다.
+    /// </summary>
+    /// <remarks>
+    /// 이것을 Failed 로 뭉뚱그리면 화면에 '실패' 로 나가고, 선생님은 안 되는 일인 줄 안다.
+    /// 실제로는 승인 창 한 번이면 되는 경우가 대부분이다(학교 PC 의 선생님 계정은
+    /// 대개 이미 관리자 그룹에 있다). 그래서 따로 둔다 — 부르는 쪽이 이걸 보고
+    /// 권한을 올려 드리겠다고 여쭐 수 있게.
+    /// </remarks>
+    NeedsElevation,
+
     /// <summary>실패.</summary>
     Failed,
 
@@ -63,6 +74,7 @@ public sealed record FixResult(FixOutcome Outcome, string Summary, IReadOnlyList
     public static FixResult AlreadyOk(string summary) => new(FixOutcome.AlreadyOk, summary);
     public static FixResult Fixed(string summary, params string[] steps) => new(FixOutcome.Fixed, summary, steps);
     public static FixResult Manual(string summary, params string[] steps) => new(FixOutcome.ManualStepStarted, summary, steps);
+    public static FixResult NeedsAdmin(string summary, params string[] steps) => new(FixOutcome.NeedsElevation, summary, steps);
     public static FixResult Failed(string summary, params string[] steps) => new(FixOutcome.Failed, summary, steps);
     public static FixResult NotSupported(string summary) => new(FixOutcome.NotSupported, summary);
 }

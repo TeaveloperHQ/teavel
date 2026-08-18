@@ -47,7 +47,7 @@ public static class Morphemes
     /// <remarks>
     /// <para>남기는 품사:</para>
     /// <list type="bullet">
-    /// <item><c>NNG·NNP·NNB·NR</c> — 명사. '엑셀' · '학번' · '프린터'</item>
+    /// <item><c>NNG·NNP·NNB·NR</c> — 명사. '엑셀' · '학번' · '문서'</item>
     /// <item><c>VV·VA·VX·XR</c> — 용언의 어간. '합치' · '나누' · '바꾸'</item>
     /// <item><c>SL·SH·SN</c> — 로마자·한자·숫자. 'pdf' · 'csv' · '2'</item>
     /// <item><c>MAG</c> — 부사. '다시' · '전부'</item>

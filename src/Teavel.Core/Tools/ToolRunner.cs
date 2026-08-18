@@ -150,7 +150,7 @@ public sealed class ToolRunner
 
     /// <summary>
     /// PowerShell 함수를 직접 부른다.
-    /// 도구 카탈로그를 거치지 않는 호출(프린터 설정 같은 세팅 작업)이 쓴다.
+    /// 도구 카탈로그를 거치지 않는 호출(업데이트 확인 같은 세팅 작업)이 쓴다.
     /// </summary>
     /// <param name="label">실패했을 때 교사에게 보여줄 이름.</param>
     public async Task<ToolRunResult> InvokeAsync(

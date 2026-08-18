@@ -15,7 +15,7 @@ public enum ToolCategory
     /// <summary>워드 — 문서 생성·변환.</summary>
     Word,
 
-    /// <summary>PC 세팅 — 프린터 등, 말로 시킬 수 있는 세팅 작업.</summary>
+    /// <summary>PC 세팅 — 계정·컴퓨터 이름 등, 말로 시킬 수 있는 세팅 작업.</summary>
     Setup,
 
     /// <summary>

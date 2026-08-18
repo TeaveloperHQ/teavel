@@ -1,5 +1,5 @@
 ﻿<#
-    PC 세팅 — Windows 계정 연결, 프린터.
+    PC 세팅 — Windows 업데이트, 계정 연결, 컴퓨터 이름.
 
     Teavel 의 본업이 여기 있다. 선생님이 못 하는 것을 대신 하거나, 왜 안 되는지 설명한다.
 #>
@@ -311,158 +311,269 @@ function Get-TeavelAccountState {
     New-TeavelResult -Message $(if ($connected) { '연결됨' } else { '아직' }) -Details $d
 }
 
+# ═══════════════════════════ Windows 업데이트 ═══════════════════════════
+
 <#
 .SYNOPSIS
-    이 컴퓨터의 프린터 상태를 알려준다. 아무것도 바꾸지 않는다.
+    이 업데이트가 판 올리기(기능 업데이트)인지.
+.DESCRIPTION
+    판 올리기는 우리가 조용히 시작하면 안 되는 것이라 반드시 갈라내야 한다.
+    한 시간 넘게 걸리고 도중에 여러 번 다시 시작한다 — 수업 직전에 그것이 시작되면
+    그 시간에 컴퓨터를 못 쓴다.
+
+    분류(Categories)에 'Upgrades' 가 붙는다. 다만 판마다 분류가 비어 오는 일이 있어
+    제목도 함께 본다("Windows 11, version 25H2" 꼴).
 #>
-function Get-PrinterStatus {
-    param()
+function Test-TeavelFeatureUpdate {
+    param([Parameter(Mandatory)] $Update)
 
-    $printers = @(Get-Printer -ErrorAction Stop)
-    if ($printers.Count -eq 0) {
-        return New-TeavelResult -Message '이 컴퓨터에 프린터가 하나도 없습니다.' -Details @(
-            '학교에서 쓰는 프린터 주소(예: \\print-server\3층복도)를 알아 오시면 등록해 드립니다.'
-        )
-    }
-
-    # 기본 프린터는 WMI 로 봐야 확실하다(Get-Printer 에는 기본 여부가 없다).
-    $default = $null
-    try { $default = (Get-CimInstance -ClassName Win32_Printer -Filter 'Default = TRUE').Name } catch { }
-
-    # "마지막에 쓴 프린터를 기본으로" 설정 — 켜져 있으면 기본 프린터가 계속 바뀐다.
-    $legacyKey = 'HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows'
-    $managedByWindows = $false
     try {
-        $v = Get-ItemProperty -Path $legacyKey -Name 'LegacyDefaultPrinterMode' -ErrorAction SilentlyContinue
-        # 0(또는 값 없음) = Windows 가 기본 프린터를 관리함
-        $managedByWindows = ($null -eq $v) -or ($v.LegacyDefaultPrinterMode -eq 0)
+        foreach ($c in @($Update.Categories)) {
+            if ($c.Name -eq 'Upgrades') { return $true }
+        }
     } catch { }
 
-    $details = New-Object System.Collections.Generic.List[string]
-    foreach ($p in ($printers | Sort-Object Name)) {
-        $mark = if ($p.Name -eq $default) { '★ 기본' } else { '      ' }
-        $where = if ($p.Type -eq 'Connection') { $p.ComputerName } else { $p.PortName }
-        $details.Add("$mark  $($p.Name)   [$where]")
-    }
-
-    if ($managedByWindows) {
-        $details.Add('')
-        $details.Add('! Windows 가 "마지막에 쓴 프린터"를 기본으로 바꾸고 있습니다.')
-        $details.Add('  기본 프린터를 정해도 계속 바뀝니다. 기본 프린터를 지정하면 이 설정도 꺼 드립니다.')
-    }
-
-    $msg = if ($default) { "프린터 $($printers.Count)대. 기본은 '$default' 입니다." }
-           else          { "프린터 $($printers.Count)대. 기본 프린터가 정해져 있지 않습니다." }
-
-    New-TeavelResult -Message $msg -Details $details
+    return ($Update.Title -match 'version\s+\d{2}H\d')
 }
 
 <#
 .SYNOPSIS
-    기본 프린터를 정한다.
+    받아야 할 Windows 업데이트가 몇 개인지 알아본다. 아무것도 설치하지 않는다.
 .DESCRIPTION
-    Windows 가 기본 프린터를 제멋대로 바꾸지 않도록 '마지막에 쓴 프린터' 기능도 함께 끈다.
-    이걸 안 끄면 지정해도 다음 인쇄 뒤에 되돌아간다.
+    Windows Update 에이전트(COM)에게 직접 물어본다. 찾아보는 것만은 관리자 권한이 필요 없다.
+
+    학교 컴퓨터는 업체가 만들어 둔 이미지를 복사해 온 것이라 만든 날에 멈춰 있다.
+    그래서 처음 켜면 밀린 것이 수십 개인 일이 흔하다.
 #>
-function Set-TeavelDefaultPrinter {
+function Get-TeavelUpdateStatus {
     param(
-        [Parameter(Mandatory)][string] $Name
+        # 드라이버까지 볼지. 기본은 보안·기능 업데이트만 본다.
+        [switch] $IncludeDrivers
     )
 
-    $printers = @(Get-Printer -ErrorAction Stop)
-    $match = $printers | Where-Object { $_.Name -eq $Name }
+    $d = New-Object System.Collections.Generic.List[string]
 
-    if (-not $match) {
-        # 정확히 같은 이름이 없으면 비슷한 것을 찾아 알려 준다(교사가 이름을 대충 말한다).
-        $similar = @($printers | Where-Object { $_.Name -like "*$Name*" })
-        if ($similar.Count -eq 1) {
-            $match = $similar[0]
-        } else {
-            $all = ($printers | ForEach-Object { $_.Name }) -join ', '
-            throw "'$Name' 이라는 프린터가 없습니다. 이 컴퓨터의 프린터: $all"
-        }
-    }
-
-    $printer = Get-CimInstance -ClassName Win32_Printer -Filter "Name='$($match.Name -replace "'","''")'"
-    if (-not $printer) { throw "'$($match.Name)' 을(를) 설정하지 못했습니다." }
-    [void](Invoke-CimMethod -InputObject $printer -MethodName SetDefaultPrinter)
-
-    $details = New-Object System.Collections.Generic.List[string]
-
-    # 1 = 사용자가 정한 기본 프린터를 유지 (0/없음 = Windows 가 마음대로 바꿈)
     try {
-        $key = 'HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows'
-        if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
-        Set-ItemProperty -Path $key -Name 'LegacyDefaultPrinterMode' -Value 1 -Type DWord
-        $details.Add('"마지막에 쓴 프린터를 기본으로" 설정을 껐습니다 — 이제 바뀌지 않습니다.')
-    } catch {
-        $details.Add('! 기본 프린터가 다시 바뀔 수 있습니다(설정을 끄지 못했습니다).')
-    }
+        $session = New-Object -ComObject Microsoft.Update.Session
+        $searcher = $session.CreateUpdateSearcher()
 
-    New-TeavelResult -Message "기본 프린터를 '$($match.Name)' 으로 정했습니다." -Details $details
+        # IsInstalled=0 : 아직 안 깔린 것. IsHidden=0 : 숨겨 두지 않은 것.
+        $query = "IsInstalled=0 and IsHidden=0"
+        if (-not $IncludeDrivers) { $query += " and Type='Software'" }
+
+        $result = $searcher.Search($query)
+        $updates = @($result.Updates)
+
+        # 판 올리기(기능 업데이트)와 나머지를 <b>갈라서</b> 센다.
+        #
+        # 둘은 성격이 전혀 다르다. 누적 업데이트는 몇 분이면 끝나고 조용히 깔아도 되지만,
+        # 판 올리기는 한 시간 넘게 걸리고 여러 번 다시 시작한다. 한 덩어리로 세면
+        # "1개 있습니다" 라고 해 놓고 한 시간짜리를 시작하게 된다.
+        $normal = 0
+        $needsReboot = $false
+
+        foreach ($u in $updates) {
+            if (Test-TeavelFeatureUpdate $u) {
+                $d.Add("upgrade=$($u.Title)")
+                continue
+            }
+
+            $normal++
+            if ($u.InstallationBehavior.RebootBehavior -ne 0) { $needsReboot = $true }
+            $d.Add("update=$($u.Title)")
+        }
+
+        $d.Add("count=$normal")
+        $d.Add("reboot=$needsReboot")
+
+        # 크기는 적지 않는다.
+        #
+        # MaxDownloadSize 는 기능 업데이트에서 못 믿는다 — 4GB 짜리를 96,907MB 로 알려 준다
+        # (실기 확인: 25H2 를 101,614,132,073 바이트로 보고했다). 화면에 내보내면
+        # "100GB 를 받아야 한다" 는 말이 되어 선생님이 겁먹고 그만둔다. 아예 읽지 않는다.
+
+        # ── 얼마나 걸릴지 가늠할 재료 ──
+        #
+        # 판 올리기는 한나절이 갈 수도 있는 일이라, 시작하기 전에 얼마나 걸릴지 알아야
+        # 언제 할지 정할 수 있다. 정확히는 못 맞히지만 <b>범위는 줄 수 있다</b> —
+        # 설치 시간을 가장 크게 가르는 것이 디스크 종류다.
+        try {
+            $disk = Get-PhysicalDisk -ErrorAction Stop |
+                    Where-Object { $_.DeviceId -eq 0 } | Select-Object -First 1
+            if ($disk) { $d.Add("disk=$($disk.MediaType)") }
+        } catch { }
+
+        try {
+            $free = (Get-PSDrive C -ErrorAction Stop).Free
+            $d.Add("freegb=$([int]($free / 1GB))")
+        } catch { }
+
+        # 얼마나 밀렸는지. 이것이 시간을 가장 크게 가른다 —
+        # 오래 밀릴수록 거쳐 갈 것이 많아져서, 판 올리기 한 번으로 끝나지 않는다.
+        # InstallDate 는 이 Windows 가 이 디스크에 놓인 날이다(업체가 이미지를 뜬 날).
+        try {
+            $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
+            if ($cv.PSObject.Properties['InstallDate']) {
+                $laid = [DateTimeOffset]::FromUnixTimeSeconds([int64]$cv.InstallDate).LocalDateTime
+                $d.Add("laid=$($laid.ToString('yyyy-MM-dd'))")
+            }
+        } catch { }
+
+        # ── 왜 여태 안 됐는지 ──
+        #
+        # 지금 밀린 것보다 <b>지난번에 왜 실패했는지</b>가 훨씬 값진 단서다.
+        # 이력에 기능 업데이트 실패가 있으면 '내려받기가 안 되는' 것이 아니라
+        # '설치가 롤백되는' 상태다 — 손볼 곳이 전혀 다르다.
+        try {
+            $history = @($searcher.QueryHistory(0, 20))
+
+            $lastOk = $history | Where-Object { $_.ResultCode -eq 2 } | Select-Object -First 1
+            if ($lastOk) { $d.Add("lastok=$($lastOk.Date.ToString('yyyy-MM-dd'))") }
+
+            # ResultCode 4 = 실패, 5 = 중단됨.
+            $lastFail = $history | Where-Object { $_.ResultCode -in 4, 5 } | Select-Object -First 1
+            if ($lastFail) {
+                $hr = '0x{0:X8}' -f ($lastFail.HResult -band 0xFFFFFFFF)
+                $d.Add("failtitle=$($lastFail.Title)")
+                $d.Add("failcode=$hr")
+                $d.Add("faildate=$($lastFail.Date.ToString('yyyy-MM-dd'))")
+            }
+        } catch { }
+
+        $msg = if ($normal -eq 0) { '받을 업데이트가 없습니다.' }
+               else { "받아야 할 업데이트가 $normal 개 있습니다." }
+
+        return New-TeavelResult -Message $msg -Details $d
+    }
+    catch {
+        # 업데이트 서비스가 꺼져 있거나 학교 정책이 막아 둔 경우가 있다.
+        # 못 물어본 것과 '없다' 는 전혀 다르므로 그렇게 말한다.
+        $d.Add("count=?")
+        $d.Add($_.Exception.Message)
+        return New-TeavelResult -Message 'Windows 업데이트를 확인하지 못했습니다.' -Details $d
+    }
 }
 
 <#
 .SYNOPSIS
-    프린터를 추가한다. 공유 프린터 또는 IP 프린터.
+    밀린 Windows 업데이트를 받아서 설치한다. 관리자 권한이 필요하다.
 .DESCRIPTION
-    학교는 대개 공유 프린터(\\서버\이름)를 쓴다. 이 경우 드라이버가 서버에서 따라오므로
-    교사가 드라이버를 따로 구할 필요가 없다 — 그래서 이 길을 먼저 권한다.
-    IP 로 직접 붙일 때는 드라이버가 이미 이 컴퓨터에 있어야 한다.
-.PARAMETER Path
-    공유 프린터 경로. 예: \\print-server\3층복도
-.PARAMETER Address
-    IP 프린터 주소. 예: 192.168.0.50
-.PARAMETER Name
-    IP 프린터일 때 붙일 이름.
-.PARAMETER DriverName
-    IP 프린터일 때 쓸 드라이버 이름. 비우면 이 컴퓨터에 있는 드라이버 목록을 알려준다.
+    받는 것과 설치하는 것을 Windows Update 에이전트에게 시킨다.
+
+    ■ 판 올리기(22H2 → 25H2)는 여기서 하지 않는다
+
+    그건 '기능 업데이트' 라 이 방법으로는 잘 되지 않고, 되더라도 한 시간 넘게 걸리며
+    도중에 여러 번 다시 시작한다. 그런 일을 콘솔 창 뒤에서 조용히 시작하면 안 된다.
+    판 올리기는 설정 화면을 열어 교사가 직접 누르게 한다.
 #>
-function Add-TeavelPrinter {
+function Install-TeavelUpdates {
     param(
-        [string] $Path,
-        [string] $Address,
-        [string] $Name,
-        [string] $DriverName
+        [switch] $IncludeDrivers
     )
 
-    if ($Path) {
-        if ($Path -notmatch '^\\\\[^\\]+\\.+') {
-            throw "공유 프린터 경로는 \\서버이름\프린터이름 형태여야 합니다. (받은 값: $Path)"
+    $d = New-Object System.Collections.Generic.List[string]
+
+    $admin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
+             ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $admin) {
+        $d.Add('PowerShell 을 [관리자 권한으로 실행] 한 뒤 다시 해 주세요.')
+        return New-TeavelResult -Message '관리자 권한이 필요합니다.' -Details $d
+    }
+
+    try {
+        $session = New-Object -ComObject Microsoft.Update.Session
+        $searcher = $session.CreateUpdateSearcher()
+
+        $query = "IsInstalled=0 and IsHidden=0"
+        if (-not $IncludeDrivers) { $query += " and Type='Software'" }
+
+        $found = @($searcher.Search($query).Updates)
+
+        # 판 올리기는 여기서 손대지 않는다. 이 한 줄이 없으면 "업데이트 설치" 라고 눌렀을 뿐인데
+        # 한 시간짜리 판 올리기가 조용히 시작된다 — 그건 교사가 시킨 일이 아니다.
+        $wanted = New-Object -ComObject Microsoft.Update.UpdateColl
+        $skipped = 0
+
+        foreach ($u in $found) {
+            if (Test-TeavelFeatureUpdate $u) { $skipped++; continue }
+
+            # 약관에 동의해야 하는 것이 섞여 있다. 동의하지 않으면 그 항목만 조용히 빠진다.
+            if (-not $u.EulaAccepted) { try { $u.AcceptEula() } catch { } }
+            [void]$wanted.Add($u)
         }
-        if (@(Get-Printer -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $Path }).Count -gt 0) {
-            return New-TeavelResult -Message '이미 등록된 프린터입니다.' -Details @($Path)
+
+        if ($skipped -gt 0) { $d.Add("upgradeskipped=$skipped") }
+
+        if ($wanted.Count -eq 0) {
+            $d.Add('count=0')
+            $msg = if ($skipped -gt 0) { '판 올리기 말고는 받을 것이 없습니다.' }
+                   else { '받을 업데이트가 없습니다.' }
+            return New-TeavelResult -Message $msg -Details $d
         }
 
-        Add-Printer -ConnectionName $Path -ErrorAction Stop
-        return New-TeavelResult -Message '공유 프린터를 등록했습니다.' -Details @(
-            $Path,
-            '드라이버는 서버에서 자동으로 받아 왔습니다.',
-            "기본 프린터로 쓰시려면 '기본 프린터 설정' 을 이어서 하세요."
-        )
+        $downloader = $session.CreateUpdateDownloader()
+        $downloader.Updates = $wanted
+        [void]$downloader.Download()
+
+        # 내려받기에 성공한 것만 설치한다.
+        $ready = New-Object -ComObject Microsoft.Update.UpdateColl
+        foreach ($u in $wanted) { if ($u.IsDownloaded) { [void]$ready.Add($u) } }
+
+        if ($ready.Count -eq 0) {
+            $d.Add('내려받지 못했습니다. 인터넷 연결을 확인해 주세요.')
+            return New-TeavelResult -Message '업데이트를 내려받지 못했습니다.' -Details $d
+        }
+
+        $installer = $session.CreateUpdateInstaller()
+        $installer.Updates = $ready
+
+        # 창을 띄우지 않고 조용히 설치한다. 이걸 안 켜면 설치 중에 대화 상자가 떠서
+        # 아무도 안 보는 화면에서 응답을 기다리며 멈춘다.
+        try { $installer.ForceQuiet = $true } catch { }
+
+        $result = $installer.Install()
+
+        # ResultCode 2 = 성공, 3 = 일부 실패해도 설치는 됨.
+        $ok = ($result.ResultCode -eq 2)
+        $d.Add("installed=$($ready.Count)")
+        $d.Add("reboot=$($result.RebootRequired)")
+        $d.Add("code=$($result.ResultCode)")
+
+        $msg = if ($result.RebootRequired) {
+            "$($ready.Count)개를 설치했습니다. 다시 시작해야 마무리됩니다."
+        } elseif ($ok) {
+            "$($ready.Count)개를 설치했습니다."
+        } else {
+            "$($ready.Count)개 중 일부가 설치되지 않았습니다."
+        }
+
+        return New-TeavelResult -Message $msg -Details $d
     }
-
-    if (-not $Address) { throw '공유 프린터 경로(\\서버\이름) 또는 IP 주소 중 하나는 알려 주셔야 합니다.' }
-    if (-not $Name)    { throw 'IP 프린터는 붙일 이름이 필요합니다.' }
-
-    if (-not $DriverName) {
-        $drivers = @(Get-PrinterDriver -ErrorAction SilentlyContinue | ForEach-Object { $_.Name } | Sort-Object)
-        throw ("IP 프린터는 드라이버 이름이 필요합니다. 이 컴퓨터에 있는 드라이버: " + ($drivers -join ', '))
+    catch {
+        $d.Add($_.Exception.Message)
+        return New-TeavelResult -Message '업데이트를 설치하지 못했습니다.' -Details $d
     }
-
-    $portName = "IP_$Address"
-    if (@(Get-PrinterPort -Name $portName -ErrorAction SilentlyContinue).Count -eq 0) {
-        Add-PrinterPort -Name $portName -PrinterHostAddress $Address -ErrorAction Stop
-    }
-
-    Add-Printer -Name $Name -DriverName $DriverName -PortName $portName -ErrorAction Stop
-
-    New-TeavelResult -Message "IP 프린터 '$Name' 을(를) 등록했습니다." -Details @(
-        "주소: $Address",
-        "드라이버: $DriverName"
-    )
 }
 
+<#
+.SYNOPSIS
+    Windows 업데이트 설정 화면을 연다.
+.DESCRIPTION
+    판 올리기(기능 업데이트)는 교사가 직접 눌러야 한다 — 오래 걸리고 여러 번 다시 시작한다.
+#>
+function Open-TeavelUpdateSetting {
+    param()
+
+    Start-Process 'ms-settings:windowsupdate'
+
+    $d = New-Object System.Collections.Generic.List[string]
+    $d.Add('[업데이트 확인] 을 누르시고, 나오는 것을 모두 설치해 주세요.')
+    $d.Add('')
+    $d.Add('판 올리기(예: 25H2)가 보이면 그것도 받으세요.')
+    $d.Add('한 시간쯤 걸리고 여러 번 다시 시작합니다. 시간이 있을 때 하시는 편이 좋습니다.')
+
+    New-TeavelResult -Message '업데이트 화면을 띄웠습니다.' -Details $d
+}
 # ═══════════════════════════ 컴퓨터 이름 ═══════════════════════════
 
 <#
@@ -604,5 +715,5 @@ function Set-TeavelComputerName {
 Export-ModuleMember -Function `
     Get-TeavelSystemFacts, Get-TeavelWindowsInfo, Get-TeavelAccountGuide, Open-TeavelAccountSetting, `
     Get-TeavelAccountState, `
-    Get-TeavelComputerName, Set-TeavelComputerName, `
-    Get-PrinterStatus, Set-TeavelDefaultPrinter, Add-TeavelPrinter
+    Get-TeavelUpdateStatus, Install-TeavelUpdates, Open-TeavelUpdateSetting, `
+    Get-TeavelComputerName, Set-TeavelComputerName

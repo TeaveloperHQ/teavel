@@ -94,6 +94,8 @@ public static class Ui
             case FixOutcome.AlreadyOk: Ok($"{title} — {result.Summary}"); break;
             case FixOutcome.Fixed: Ok($"{title} — {result.Summary}"); break;
             case FixOutcome.ManualStepStarted: Warn($"{title} — {result.Summary}"); break;
+            // 실패가 아니다 — 권한만 올리면 되는 것이라 그렇게 보이면 안 된다.
+            case FixOutcome.NeedsElevation: Warn($"{title} — {result.Summary}"); break;
             case FixOutcome.NotSupported: Dim($"  - {title} — {result.Summary}"); break;
             default: Error($"{title} — {result.Summary}"); break;
         }

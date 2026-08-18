@@ -136,6 +136,91 @@ public sealed class TeavelSession : IAsyncDisposable
         return needsFix == 0 ? 0 : 1;
     }
 
+    /// <summary>
+    /// 관리자 권한이 필요할 때 <b>스스로 올려 드린다.</b>
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 학교 PC 의 선생님 계정은 대개 이미 관리자 그룹에 들어 있고, UAC 가 평소에만 걸러 둔다.
+    /// 그러니 실제로 필요한 것은 <b>승인 창 한 번</b>뿐인데, 예전에는
+    /// "PowerShell 을 관리자 권한으로 실행한 뒤 다시 해 주세요" 라고 말했다.
+    /// 그건 선생님에게 또 하나의 벽이다 — 어디를 눌러야 그렇게 되는지 아는 분이면
+    /// 애초에 Teavel 이 필요하지 않았다.
+    /// </para>
+    /// <para>
+    /// 관리자가 아예 아닌 계정에는 <b>권하지 않는다.</b> 그때 승인 창은 남의 계정과
+    /// 비밀번호를 물어보는데, 선생님이 그걸 알 리 없고 알아야 할 까닭도 없다.
+    /// </para>
+    /// </remarks>
+    /// <returns>새 창을 띄웠으면 true — 부르는 쪽은 하던 일을 접어야 한다.</returns>
+    private bool OfferElevation(string why)
+    {
+        switch (Elevation.Current)
+        {
+            case ElevationKind.Elevated:
+                return false;   // 이미 되고 있다
+
+            case ElevationKind.NotAdministrator:
+                Console.WriteLine();
+                Ui.Warn($"{why} 관리자 권한이 필요합니다.");
+                Ui.Dim("      그런데 이 계정은 이 컴퓨터의 관리자가 아닙니다.");
+                Ui.Dim("      전산 담당 선생님이나 업체에 요청하셔야 합니다.");
+                return false;
+
+            case ElevationKind.Unknown:
+                Console.WriteLine();
+                Ui.Warn($"{why} 관리자 권한이 필요합니다.");
+                Ui.Dim("      PowerShell 을 [관리자 권한으로 실행] 한 뒤 다시 해 주세요.");
+                return false;
+        }
+
+        // 여기서부터는 Filtered — 승인 창 한 번이면 된다.
+        var exe = TeavelExe.Running;
+        if (exe is null)
+        {
+            Console.WriteLine();
+            Ui.Warn($"{why} 관리자 권한이 필요합니다.");
+            Ui.Dim("      teavel.exe 를 직접 실행하신 뒤 다시 해 주세요.");
+            return false;
+        }
+
+        Console.WriteLine();
+        Ui.Warn($"{why} 관리자 권한이 필요합니다.");
+        Ui.Dim("      선생님 계정은 이 컴퓨터의 관리자입니다 — 승인 창만 한 번 뜨면 됩니다.");
+
+        if (!AssumeYes && !Ui.Confirm("      지금 관리자 권한으로 다시 열까요?"))
+        {
+            Ui.Info("그냥 두겠습니다.");
+            return false;
+        }
+
+        // 하던 명령을 그대로 물려준다. 새 창이 처음부터 다시 묻게 하면 안 된다.
+        var args = Environment.GetCommandLineArgs().Skip(1).ToList();
+        if (StartFolder is not null && !args.Contains("--here"))
+        {
+            args.Add("--here");
+            args.Add(StartFolder);
+        }
+
+        switch (Elevation.Relaunch(exe, args, StartFolder))
+        {
+            case ElevationLaunch.Started:
+                Console.WriteLine();
+                Ui.Ok("관리자 권한으로 새 창을 열었습니다.");
+                Ui.Dim("      그 창에서 이어서 진행해 주세요. 이 창은 닫으셔도 됩니다.");
+                return true;
+
+            case ElevationLaunch.Declined:
+                Ui.Info("승인하지 않으셨습니다. 그냥 두겠습니다.");
+                return false;
+
+            default:
+                Ui.Error("관리자 권한으로 여는 데 실패했습니다.");
+                Ui.Dim("      teavel.exe 를 오른쪽 클릭 → [관리자 권한으로 실행] 해 주세요.");
+                return false;
+        }
+    }
+
     /// <summary>손봐야 할 것들을 고친다. id 를 주면 그 항목만.</summary>
     public async Task<int> RunFixAsync(string? id, CancellationToken ct)
     {
@@ -176,7 +261,12 @@ public sealed class TeavelSession : IAsyncDisposable
                 continue;
             }
 
-            Ui.Fix(task.Title, await task.FixAsync(ct).ConfigureAwait(false));
+            var fix = await task.FixAsync(ct).ConfigureAwait(false);
+            Ui.Fix(task.Title, fix);
+
+            // 권한만 올리면 되는 것이면 여기서 올려 드린다. 실패로 넘기지 않는다.
+            if (fix.Outcome == FixOutcome.NeedsElevation && OfferElevation($"'{task.Title}' 은(는)"))
+                return 0;   // 새 창이 이어서 한다
         }
         return 0;
     }
@@ -647,7 +737,7 @@ public sealed class TeavelSession : IAsyncDisposable
         Console.WriteLine();
         Ui.Dim("  'teavel 점검' 으로 지금 상태를 보고, 'teavel 고침' 으로 손봅니다.");
 
-        // 세팅에 딸린 것들(프린터)을 먼저 보이고, 업무 도구는 뒤로 둔다.
+        // 세팅에 딸린 것들을 먼저 보이고, 업무 도구는 뒤로 둔다.
         foreach (var group in ToolCatalog.ByCategory().OrderBy(g => g.Key == ToolCategory.Setup ? 0 : 1))
         {
             Ui.Title(CategoryName(group.Key));
@@ -982,6 +1072,25 @@ public sealed class TeavelSession : IAsyncDisposable
             Ui.Warn("PATH 에 등록돼 있지 않습니다. 'teavel 설치' 로 등록하면 어디서나 teavel 만 쳐도 됩니다.");
         }
 
+        // 권한 상태. 안 되는 일의 상당수가 여기서 갈리므로 밝혀 둔다.
+        switch (Elevation.Current)
+        {
+            case ElevationKind.Elevated:
+                Ui.Ok("관리자 권한으로 돌고 있습니다 — 업데이트 설치까지 됩니다.");
+                break;
+            case ElevationKind.Filtered:
+                Ui.Info("지금은 일반 권한입니다. 관리자 권한이 필요한 일은 승인 창을 띄워 드립니다.");
+                Ui.Dim("      (선생님 계정은 이 컴퓨터의 관리자입니다)");
+                break;
+            case ElevationKind.NotAdministrator:
+                Ui.Warn("이 계정은 이 컴퓨터의 관리자가 아닙니다.");
+                Ui.Dim("      업데이트 설치·컴퓨터 이름 바꾸기 같은 일은 전산 담당께 요청하셔야 합니다.");
+                break;
+            default:
+                Ui.Dim("      권한 상태를 확인하지 못했습니다.");
+                break;
+        }
+
         // 지울 길이 있는지도 확인해 준다. 이것이 빠져 있으면 나중에 지우려는 선생님이
         // 설정 > 앱 을 열었을 때 Teavel 이 목록에 없어서 방법을 못 찾는다.
         if (_uninstall.IsRegistered())
@@ -1293,7 +1402,7 @@ public sealed class TeavelSession : IAsyncDisposable
 
     private static string CategoryName(ToolCategory c) => c switch
     {
-        ToolCategory.Setup => "말로 물어보실 수 있는 것 — 계정·프린터",
+        ToolCategory.Setup => "말로 물어보실 수 있는 것 — 계정·컴퓨터 이름",
         ToolCategory.Excel => "(보조) 엑셀 — 성적·명단",
         ToolCategory.Files => "(보조) 파일·폴더 정리",
         ToolCategory.Outlook => "(보조) 아웃룩 — 메일",
