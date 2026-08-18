@@ -218,7 +218,7 @@ public sealed class LocalLlmIntentRouter : IIntentRouter, IDisposable
             {
                 ToolParamKind.Number => "숫자",
                 ToolParamKind.Bool => "true 또는 false",
-                ToolParamKind.Choice => string.Join(" 또는 ", p.Choices ?? Array.Empty<string>()),
+                ToolParamKind.Choice => string.Join(" 또는 ", p.Values),
                 _ => "글자",
             };
             fields.AppendLine($"- \"{p.Name}\" ({kind}): {p.Description}");

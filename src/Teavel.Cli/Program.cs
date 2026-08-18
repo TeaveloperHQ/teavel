@@ -60,6 +60,7 @@ try
     return command switch
     {
         null                          => await session.RunInteractiveAsync(cancel.Token),
+        "계정" or "연결" or "account" => await session.RunAccountAsync(cancel.Token),
         "점검" or "check"             => await session.RunCheckAsync(cancel.Token),
         "고침" or "손보기" or "fix"   => await session.RunFixAsync(argument, cancel.Token),
         "목록" or "list"              => Run(session.RunList),
@@ -91,6 +92,8 @@ static void PrintHelp()
     Ui.Plain("""
 
       teavel                하고 싶은 일을 말로 적으면 알아서 처리합니다
+      teavel 계정           학교 계정을 Edge·원드라이브·오피스·아웃룩에 연결합니다
+                            (처음 세팅이라면 여기서 시작하세요)
       teavel 점검           OneDrive·Office·Teams·teaveloper 앱 상태를 확인합니다
       teavel 고침 [항목]    확인된 문제를 손봅니다
       teavel 목록           할 수 있는 일을 보여줍니다

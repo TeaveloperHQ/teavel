@@ -87,11 +87,12 @@ public sealed class ToolArgumentValidator
                 return false;
 
             case ToolParamKind.Choice:
-                var choice = (p.Choices ?? Array.Empty<string>())
-                    .FirstOrDefault(c => string.Equals(c, text.Trim(), StringComparison.OrdinalIgnoreCase));
+                // 값 그대로 친 것도, 우리말로 친 것도 받는다 — 화면에는 우리말이 나가므로
+                // 우리말로 답하는 것이 오히려 자연스럽다.
+                var choice = p.Match(text);
                 if (choice is null)
-                    errors.Add($"'{p.Label}' 은(는) {string.Join(" / ", p.Choices ?? Array.Empty<string>())} 중 하나여야 합니다. (받은 값: {text})");
-                return choice ?? text.Trim();
+                    errors.Add($"'{p.Label}' 은(는) {string.Join(" / ", p.Values)} 중 하나여야 합니다. (받은 값: {text})");
+                return choice?.Value ?? text.Trim();
 
             case ToolParamKind.FilePath:
             {

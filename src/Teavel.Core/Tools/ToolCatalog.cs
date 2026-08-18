@@ -44,6 +44,37 @@ public static class ToolCatalog
         //   > 언어모델 다운로드 하자     → 무슨 일인지 알아듣지 못했습니다
         //
         // 정확한 낱말을 알아야만 닿는다면, 그 낱말을 모르는 사람에게는 없는 기능이다.
+        // 학교에서 컴퓨터를 처음 세팅할 때 가장 먼저 할 일이다. 선생님이 이 일을 부를 때
+        // 쓰는 말이 워낙 여러 가지라(계정 연결·로그인·원드라이브 설정·메일 설정…)
+        // 유의어를 넉넉히 적어 둔다 — 여기 닿지 못하면 세팅이 시작조차 되지 않는다.
+        new ToolSpec(
+            Id: "setup.connect_accounts",
+            Title: "학교 계정을 이 컴퓨터에 연결하기",
+            Category: ToolCategory.Setup,
+            Description: "학교에서 받은 계정을 Windows 에 잇고, Edge·원드라이브·오피스·아웃룩·팀즈가 "
+                       + "그 계정을 쓰도록 차례로 안내합니다. 원드라이브는 무엇이 동기화되고 있는지 "
+                       + "보여 주고 폴더를 고를 수 있게 합니다.",
+            Examples: new[]
+            {
+                "학교 계정 연결해줘",
+                "원드라이브 설정 좀 해줘",
+                "엣지에 학교 계정 넣어줘",
+                "처음 세팅하는데 뭐부터 해야 돼",
+                "오피스 로그인 어떻게 해",
+            },
+            Parameters: Array.Empty<ToolParam>(),
+            Module: "@flow",
+            Function: "accounts",
+            Mutating: false)
+        {
+            Aliases = new[]
+            {
+                "계정 연결", "계정", "로그인", "학교 계정", "계정 잇기", "처음 세팅", "초기 세팅",
+                "원드라이브", "onedrive", "동기화", "백업 폴더", "엣지", "edge", "브라우저",
+                "오피스 로그인", "메일 설정", "아웃룩 설정",
+            },
+        },
+
         new ToolSpec(
             Id: "teavel.install",
             Title: "어디서나 teavel 로 실행되게 등록하기",
@@ -319,7 +350,12 @@ public static class ToolCatalog
             {
                 new ToolParam("File", ToolParamKind.FilePath, "원본 파일", "바꿀 엑셀 또는 CSV 파일."),
                 new ToolParam("To", ToolParamKind.Choice, "바꿀 형식", "어떤 형식으로 바꿀지.",
-                    Choices: new[] { "csv", "xlsx", "pdf" }),
+                    Choices: new[]
+                    {
+                        new ToolChoice("csv", "CSV — 나이스에 올릴 쉼표 구분 파일", "csv", "쉼표", "나이스", "neis"),
+                        new ToolChoice("xlsx", "엑셀 (xlsx)", "엑셀", "xlsx", "excel"),
+                        new ToolChoice("pdf", "PDF", "pdf", "피디에프"),
+                    }),
                 new ToolParam("Output", ToolParamKind.OutputPath, "저장할 파일",
                     "결과 파일 경로. 비우면 원본 옆에 같은 이름으로 만듭니다.", Required: false),
             },
@@ -506,7 +542,12 @@ public static class ToolCatalog
                 new ToolParam("NameColumn", ToolParamKind.Text, "파일 이름에 쓸 열",
                     "만들어지는 파일 이름에 쓸 열. 예: 이름", Required: false, Default: "이름"),
                 new ToolParam("Format", ToolParamKind.Choice, "저장 형식", "어떤 형식으로 저장할지.",
-                    Required: false, Default: "docx", Choices: new[] { "docx", "pdf" }),
+                    Required: false, Default: "docx",
+                    Choices: new[]
+                    {
+                        new ToolChoice("docx", "워드 문서 (docx) — 나중에 고칠 수 있습니다", "워드", "docx", "doc", "고칠"),
+                        new ToolChoice("pdf", "PDF — 그대로 인쇄하거나 보낼 때", "pdf", "피디에프", "인쇄"),
+                    }),
                 Sheet(),
                 HeaderRow(),
             },
@@ -573,12 +614,26 @@ public static class ToolCatalog
                 new ToolParam("Ownership", ToolParamKind.Choice, "이 컴퓨터는",
                     "학교에서 지급한 컴퓨터인지 개인 컴퓨터인지에 따라 해야 할 일이 다릅니다.",
                     Required: false, Default: "unknown",
-                    Choices: new[] { "school", "personal", "unknown" }),
+                    Choices: new[]
+                    {
+                        new ToolChoice("school", "학교에서 준 컴퓨터입니다",
+                            "학교", "지급", "관용", "업무", "회사", "기관"),
+                        new ToolChoice("personal", "제 개인 컴퓨터입니다",
+                            "개인", "제것", "내것", "사비", "집"),
+                        new ToolChoice("unknown", "잘 모르겠습니다", "모르", "글쎄", "몰라"),
+                    }),
                 new ToolParam("Account", ToolParamKind.Choice, "쓰실 계정은",
-                    "학교에서 받은 M365 계정이 있으면 school, 없어서 개인 Microsoft 계정을 "
-                  + "쓰실 거면 personal 입니다. 개인 계정이면 안내가 완전히 달라집니다.",
+                    "학교에서 받은 M365 계정이 있으면 학교 계정, 없어서 개인 Microsoft 계정을 "
+                  + "쓰실 거면 개인 계정입니다. 개인 계정이면 안내가 완전히 달라집니다.",
                     Required: false, Default: "unknown",
-                    Choices: new[] { "school", "personal", "unknown" }),
+                    Choices: new[]
+                    {
+                        new ToolChoice("school", "학교에서 받은 계정을 씁니다  (@___.sen.go.kr 같은 것)",
+                            "학교", "받은", "업무", "기관", "sen", "go.kr"),
+                        new ToolChoice("personal", "개인 Microsoft 계정을 씁니다  (hotmail·outlook 등)",
+                            "개인", "내", "제", "hotmail", "outlook", "gmail", "네이버"),
+                        new ToolChoice("unknown", "잘 모르겠습니다", "모르", "글쎄", "몰라"),
+                    }),
             },
             Module: "Teavel.Setup", Function: "Get-TeavelAccountGuide", Mutating: false, TimeoutSeconds: 60)
             { Aliases = new[] { "학교 계정", "계정 추가", "장치 연결", "조인", "회사 또는 학교", "로그인" } },

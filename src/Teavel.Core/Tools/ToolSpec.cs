@@ -55,6 +55,29 @@ public enum ToolParamKind
     Choice,
 }
 
+/// <summary>
+/// 갈래 하나 — 넘길 값과, 교사에게 보여 줄 말과, 이렇게 쳐도 알아들을 말들.
+/// </summary>
+/// <remarks>
+/// <para>
+/// 예전에는 갈래를 <c>{ "school", "personal", "unknown" }</c> 처럼 값만 늘어놓았다.
+/// 그 값은 PowerShell 매개변수라 영어인데, 화면에도 그대로 나가고 <b>그대로 쳐야만</b> 받아 줬다.
+/// 그래서 이렇게 끝났다.
+/// </para>
+/// <code>
+///   이 컴퓨터는 [school / personal / unknown]: 학교컴퓨터야
+///   ✗ '이 컴퓨터는' 은(는) school / personal / unknown 중 하나여야 합니다.
+/// </code>
+/// <para>
+/// 한국어로 묻고 영어로 답하라고 한 셈이고, 틀리면 하던 일이 통째로 날아갔다.
+/// 이제 값과 <b>보여 줄 말</b>을 갈라 둔다 — 화면에는 우리말이 나가고, 함수에는 값이 간다.
+/// </para>
+/// </remarks>
+/// <param name="Value">PowerShell 함수에 넘어갈 값. 이것만 함수에 닿는다.</param>
+/// <param name="Label">교사에게 보여 줄 말.</param>
+/// <param name="Words">번호 대신 이렇게 쳐도 이 갈래로 알아듣는다.</param>
+public sealed record ToolChoice(string Value, string Label, params string[] Words);
+
 /// <summary>도구 인자 하나.</summary>
 /// <param name="Name">PowerShell 함수의 매개변수 이름과 정확히 같아야 한다.</param>
 /// <param name="Kind">값의 종류.</param>
@@ -62,7 +85,7 @@ public enum ToolParamKind
 /// <param name="Description">무엇인지 — LLM 이 값을 뽑을 때 쓰는 설명이기도 하다.</param>
 /// <param name="Required">필수인지. false면 <paramref name="Default"/> 가 쓰인다.</param>
 /// <param name="Default">기본값(문자열 표현). 필수가 아닐 때만 의미가 있다.</param>
-/// <param name="Choices"><see cref="ToolParamKind.Choice"/> 일 때 허용되는 값들.</param>
+/// <param name="Choices"><see cref="ToolParamKind.Choice"/> 일 때 고를 수 있는 갈래들.</param>
 public sealed record ToolParam(
     string Name,
     ToolParamKind Kind,
@@ -70,7 +93,39 @@ public sealed record ToolParam(
     string Description,
     bool Required = true,
     string? Default = null,
-    IReadOnlyList<string>? Choices = null);
+    IReadOnlyList<ToolChoice>? Choices = null)
+{
+    /// <summary>갈래들. 갈래형이 아니면 빈 목록.</summary>
+    public IReadOnlyList<ToolChoice> Options => Choices ?? Array.Empty<ToolChoice>();
+
+    /// <summary>PowerShell 에 넘어갈 수 있는 값들 — 검증과 LLM 힌트에 쓴다.</summary>
+    public IEnumerable<string> Values => Options.Select(c => c.Value);
+
+    /// <summary>
+    /// 교사가 친 말을 갈래로 맞춘다. 못 맞추면 null.
+    /// </summary>
+    /// <remarks>
+    /// 값 그대로 친 것도, 우리말로 친 것도 받는다. 언어 모델이 뽑아 온 값도 여기를 지나므로
+    /// 모델이 "학교" 라고 적어 와도 school 로 내려간다.
+    /// </remarks>
+    public ToolChoice? Match(string said)
+    {
+        var t = said.Trim();
+        if (t.Length == 0) return null;
+
+        foreach (var c in Options)
+            if (string.Equals(c.Value, t, StringComparison.OrdinalIgnoreCase)) return c;
+
+        // 우리말로 친 경우. 붙여 쓰거나 조사가 붙어도 걸리도록 '품고 있는지' 로 본다
+        // ("학교컴퓨터야" 안에 "학교" 가 있다).
+        var packed = t.Replace(" ", "").ToLowerInvariant();
+        foreach (var c in Options)
+            foreach (var w in c.Words)
+                if (packed.Contains(w.Replace(" ", "").ToLowerInvariant(), StringComparison.Ordinal)) return c;
+
+        return null;
+    }
+}
 
 /// <summary>
 /// 도구 하나의 선언. 실제 동작은 PowerShell 모듈의 함수가 하고,

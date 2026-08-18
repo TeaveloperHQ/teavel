@@ -24,6 +24,7 @@ public sealed class TeavelSession : IAsyncDisposable
     private readonly PathRegistration _path;
     private readonly ExplorerRegistration _explorer;
     private readonly UninstallRegistration _uninstall;
+    private readonly IRegistry _registry;
 
     /// <summary>확인 없이 바로 실행할지(--yes).</summary>
     public bool AssumeYes { get; init; }
@@ -39,9 +40,10 @@ public sealed class TeavelSession : IAsyncDisposable
         _paths = new SystemPaths();
         _proc = new ProcessRunner();
 
-        IRegistry registry = OperatingSystem.IsWindows()
+        _registry = OperatingSystem.IsWindows()
             ? new WindowsRegistry()
             : new InMemoryRegistry();   // 개발용 — Windows 가 아니면 아무것도 못 찾는 상태로 동작한다
+        var registry = _registry;
 
         var facts = new WindowsFacts(registry, _paths);
 
@@ -246,6 +248,23 @@ public sealed class TeavelSession : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// 학교 계정을 이 컴퓨터의 Microsoft 앱들에 잇는다.
+    /// </summary>
+    /// <remarks>
+    /// 학교에서 컴퓨터를 처음 세팅할 때 <b>가장 먼저 할 일</b>이라 따로 명령을 두었다.
+    /// '점검' 은 열 가지를 늘어놓지만, 실제로는 계정 하나를 잇는 것이 그중 대부분을 해결한다.
+    /// </remarks>
+    public Task<int> RunAccountAsync(CancellationToken ct)
+    {
+        var facts = new WindowsFacts(_registry, _paths);
+        var flow = new AccountFlow(
+            facts, new EdgeFacts(_paths), new OneDriveDetail(facts, _paths),
+            _tools, _proc, AssumeYes);
+
+        return flow.RunAsync(ct);
+    }
+
     /// <summary>선생님을 이름으로 찾아 계정을 알려 준다.</summary>
     public Task<int> RunFindTeacherAsync(string? name, CancellationToken ct)
         => M365Flow.FindTeacherAsync(_tools, name, ct);
@@ -342,6 +361,7 @@ public sealed class TeavelSession : IAsyncDisposable
     {
         Ui.Plain("""
 
+              계정        학교 계정을 앱들에 연결합니다 (처음이면 여기서 시작)
               점검        지금 무엇이 안 돼 있는지 봅니다
               고침        하나씩 손봅니다
               목록        할 수 있는 일을 보여 줍니다
@@ -464,6 +484,10 @@ public sealed class TeavelSession : IAsyncDisposable
 
             case "uninstall":
                 RunUnregister();
+                return;
+
+            case "accounts":
+                await RunAccountAsync(ct).ConfigureAwait(false);
                 return;
 
             case "model":
@@ -1038,6 +1062,7 @@ public sealed class TeavelSession : IAsyncDisposable
             // 그 명령들은 사실상 없는 것이나 마찬가지다.
             if (line is "나가기" or "종료" or "exit" or "quit") return 0;
             if (line is "목록" or "list") { RunList(); continue; }
+            if (line is "계정" or "연결" or "account") { await RunAccountAsync(ct).ConfigureAwait(false); continue; }
             if (line is "점검" or "check") { await RunCheckAsync(ct).ConfigureAwait(false); continue; }
             if (line is "고침" or "손보기" or "fix") { await RunFixAsync(null, ct).ConfigureAwait(false); continue; }
             if (line is "자가점검" or "selfcheck") { await RunSelfCheckAsync(ct).ConfigureAwait(false); continue; }
@@ -1124,6 +1149,42 @@ public sealed class TeavelSession : IAsyncDisposable
         await RunToolAsync(chosen, utterance, ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// 갈래를 고르게 한다. 안 고르셨으면 null.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 번호로도, 말로도 받는다 — <see cref="Ui.Choose"/> 가 둘 다 알아듣는다.
+    /// 알아듣지 못하면 넘겨짚지 않고 다시 묻되, <b>하던 일을 버리지 않는다.</b>
+    /// 예전에는 여기서 틀리면 도구가 통째로 취소돼 처음부터 다시 해야 했다.
+    /// </para>
+    /// <para>
+    /// 값이 아니라 <see cref="ToolChoice.Label"/> 을 보여 준다. PowerShell 매개변수 값은
+    /// 영어라, 그것을 그대로 띄우면 우리말로 답한 선생님이 틀린 것이 된다.
+    /// </para>
+    /// </remarks>
+    private static string? AskChoice(ToolParam p)
+    {
+        Ui.Dim($"      {p.Description}");
+
+        var options = p.Options
+            .Select((c, i) => new Ui.Choice((i + 1).ToString(), $"[{i + 1}] {c.Label}", c.Words))
+            .ToList();
+
+        // 필수가 아니면 기본값 갈래를 Enter 로 고를 수 있게 한다.
+        var fallback = p.Required || p.Default is null
+            ? ""
+            : (p.Options.Select((c, i) => (c, i))
+                        .FirstOrDefault(t => string.Equals(t.c.Value, p.Default, StringComparison.OrdinalIgnoreCase))
+                        is { c: not null } hit ? (hit.i + 1).ToString() : "");
+
+        var picked = Ui.Choose($"{p.Label}", options, fallback);
+
+        return int.TryParse(picked, out var n) && n >= 1 && n <= p.Options.Count
+            ? p.Options[n - 1].Value
+            : null;
+    }
+
     /// <summary>모자란 인자를 묻고, 검증하고, 실행한다.</summary>
     private async Task RunToolAsync(IntentMatch match, string utterance, CancellationToken ct)
     {
@@ -1149,6 +1210,21 @@ public sealed class TeavelSession : IAsyncDisposable
         {
             if (args.ContainsKey(p.Name)) continue;
 
+            // 갈래는 번호로 고르게 한다.
+            //
+            // 예전에는 [school / personal / unknown] 을 띄우고 그대로 치기를 기다렸다.
+            // 한국어로 물어 놓고 영어로 답하라는 것이라, 선생님이 "학교컴퓨터야" 라고 치면
+            // 튕겨 나갔다 — 그것도 <b>하던 일이 통째로 날아간 채로</b>. 실제로 그렇게 막혔다.
+            // 이제 우리말 보기를 번호와 함께 보여 주고, 번호로도 말로도 받는다.
+            if (p.Kind == ToolParamKind.Choice && p.Options.Count > 0)
+            {
+                if (AskChoice(p) is { } picked) { args[p.Name] = picked; continue; }
+
+                // 필수인데 안 고르셨다 — 넘겨짚지 않는다.
+                if (p.Required) { Ui.Info("취소했습니다."); return; }
+                continue;
+            }
+
             // 탐색기에서 폴더를 열어 들어왔다면, 폴더를 묻는 자리의 기본값은 그 폴더다.
             // 긴 경로를 손으로 치게 하면 자연어로 만든 편의가 통째로 무의미해진다.
             var folderDefault = p.Kind == ToolParamKind.FolderPath ? StartFolder : null;
@@ -1160,8 +1236,6 @@ public sealed class TeavelSession : IAsyncDisposable
                 hint = $" (그냥 Enter 면 {(string.IsNullOrEmpty(p.Default) ? "생략" : p.Default)})";
             else
                 hint = "";
-
-            if (p.Kind == ToolParamKind.Choice) hint += $" [{string.Join(" / ", p.Choices ?? Array.Empty<string>())}]";
 
             Ui.Dim($"      {p.Description}");
             var value = Ui.Ask($"      {p.Label}{hint}: ")?.Trim();

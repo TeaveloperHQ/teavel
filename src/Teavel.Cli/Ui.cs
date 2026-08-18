@@ -30,6 +30,42 @@ public static class Ui
     public static void Plain(string text) => Console.WriteLine(text);
     public static void Dim(string text) => Write(text, ConsoleColor.DarkGray);
 
+    /// <summary>
+    /// 표처럼 줄을 맞출 때 오른쪽을 채운다.
+    /// </summary>
+    /// <remarks>
+    /// C# 의 <c>{x,-12}</c> 는 <b>글자 수</b>를 세는데, 화면에서 한글은 두 칸을 차지한다.
+    /// 그래서 그대로 쓰면 "Edge" 와 "원드라이브" 가 같은 자리에서 시작하지 않고 표가 어긋난다.
+    /// 여기서는 <b>칸 수</b>로 센다.
+    /// </remarks>
+    public static string Pad(string text, int columns)
+    {
+        var w = Width(text);
+        return w >= columns ? text : text + new string(' ', columns - w);
+    }
+
+    /// <summary>화면에서 차지하는 칸 수.</summary>
+    public static int Width(string text)
+    {
+        var w = 0;
+        foreach (var c in text) w += IsWide(c) ? 2 : 1;
+        return w;
+    }
+
+    /// <summary>두 칸을 차지하는 글자인지 — 한글·한자·가나·전각.</summary>
+    private static bool IsWide(char c)
+        => c >= 'ᄀ'
+        && (c <= 'ᅟ'                             // 한글 자모
+         || c is >= '⺀' and <= '〾'          // 한자 부수·CJK 기호
+         || c is >= 'ぁ' and <= '㏿'          // 가나·한글 호환 자모·CJK 조합
+         || c is >= '㐀' and <= '䶿'          // 한자 확장 A
+         || c is >= '一' and <= '鿿'          // 한자
+         || c is >= '가' and <= '힣'          // 한글 음절
+         || c is >= '豈' and <= '﫿'          // 한자 호환
+         || c is >= '︰' and <= '﹯'
+         || c is >= '＀' and <= '｠'          // 전각
+         || c is >= '￠' and <= '￦');
+
     /// <summary>들여쓴 자세한 줄들.</summary>
     public static void Details(IEnumerable<string> lines)
     {
@@ -115,7 +151,9 @@ public static class Ui
 
         while (true)
         {
-            var line = Ask($"        {prompt} [{defaultKey}] ");
+            // 기본값이 없으면 대괄호를 아예 띄우지 않는다 — 빈 [] 는 무엇을 치라는 것인지 알 수 없다.
+            var suffix = defaultKey.Length > 0 ? $" [{defaultKey}]" : "";
+            var line = Ask($"        {prompt}{suffix} ");
             if (line is null) return defaultKey;               // EOF — 물어볼 사람이 없다
 
             var t = line.Trim();
