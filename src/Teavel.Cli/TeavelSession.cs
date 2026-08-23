@@ -1220,6 +1220,20 @@ public sealed class TeavelSession : IAsyncDisposable
 
     private async Task HandleUtteranceAsync(string utterance, CancellationToken ct)
     {
+        // 말이 안 되는 것은 라우터에 넘기지 않는다.
+        //
+        // 넘기면 두 가지가 벌어진다. 낱말 라우터가 억지로 무언가를 집어 도구를 열거나
+        // (한 글자 '1' 에 파일 이름 바꾸기가 열렸다), 확신이 안 서면 언어 모델을 부르느라
+        // 오타 하나에 1GB 를 읽는다. 둘 다 여기서 막는다.
+        if (!Utterance.LooksLikeRequest(utterance))
+        {
+            Console.WriteLine();
+            Ui.Info("무슨 말씀이신지 잘 모르겠습니다.");
+            Ui.Dim("      하시려는 일을 적어 주시면 됩니다.  예: 엑셀 다 합쳐줘");
+            Ui.Dim("      할 수 있는 일을 보시려면 '목록', 도움이 필요하시면 '도움말' 이라고 치세요.");
+            return;
+        }
+
         var matches = await _router.RouteAsync(utterance, ct).ConfigureAwait(false);
 
         if (matches.Count == 0)

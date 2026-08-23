@@ -62,7 +62,7 @@ var CASES = new Case[]
     new("상장을 애들 이름 넣어서 여러 장 만들어야 해",          "word.mail_merge"),
     new("학교 계정 어떻게 넣어요",                              "setup.account_guide"),
     new("내 컴퓨터 윈도우 뭐 쓰는지 알려줘",                    "setup.windows_info"),
-    new("3층 복도 걸로 인쇄되게 해줘",                          "printer.set_default"),
+    new("컴퓨터에 학교 메일 계정 좀 넣어줘",                    "setup.connect_accounts"),
     new("반마다 따로 파일이 되게 쪼개줘",                       "excel.split_by_column"),
     new("첨부로 온 것들 좀 챙겨줘",                             "outlook.save_attachments"),
 };
