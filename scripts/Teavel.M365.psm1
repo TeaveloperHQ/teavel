@@ -24,11 +24,52 @@ Set-StrictMode -Version Latest
 
 # 팀·그룹 작업에 필요한 모듈. Graph 는 보안 그룹(고급)에서만 쓴다.
 # 최소 버전은 낮게 잡는다 — 3.x 면 우리가 쓰는 것은 다 있다.
-# (Connect-ExchangeOnline -Device 는 필요 없다. 교사 PC 에서는 브라우저 창이 그냥 뜬다)
+# Connect-ExchangeOnline 의 -Device 는 '필요 없는' 것이 아니라 <b>쓸 수 없는</b> 것이다.
+# 그것은 동적 매개변수라 $PSEdition -eq 'Core'(PowerShell 7)일 때만 등록된다.
+# 학교 PC 기본값인 5.1 에는 아예 없어서 Get-Command 의 매개변수 목록에도 안 보인다.
+#
+#   PS 5.1 · 창 있는 콘솔        브라우저(WAM) — 됨
+#   PS 5.1 · 파이프 상주 프로세스  실패(창 핸들) → -DisableWAM 필요
+#   PS 7                        -Device 사용 가능
+#
+# MicrosoftTeams 는 5.1 에서도 -UseDeviceAuthentication 이 있다.
+# 둘의 인증 능력이 다르므로 한 덩어리로 다루면 안 된다.
 $script:CoreModules = @(
     @{ Name = 'ExchangeOnlineManagement'; Min = [version]'3.0.0'; What = '그룹·메일' }
     @{ Name = 'MicrosoftTeams';           Min = [version]'4.0.0'; What = '팀'       }
 )
+
+<#
+.SYNOPSIS
+    이 경로가 OneDrive 안인지.
+.DESCRIPTION
+    <b>업무용 OneDrive 는 폴더 이름이 다르다.</b> 개인용은 `OneDrive` 지만
+    학교·회사 계정은 `OneDrive - 늘푸른중학교` 처럼 <b>조직명이 붙는다.</b>
+
+    그래서 예전 판정(`-notmatch '\\OneDrive\\'`)은 업무용을 통째로 놓쳤다.
+    이 함수가 있는 까닭이 바로 그 자리를 피하는 것인데, 정확히 그 자리를 골랐다:
+
+        Get-TeavelModuleDirectory
+        → C:\Users\user\OneDrive - 늘푸른중학교\문서\WindowsPowerShell\Modules
+
+    그 결과 모듈이 OneDrive 아래 깔리고, 파일 온디맨드가 DLL 을 자리표시자로 만들어
+    로드가 실패한다. 실기에서 MicrosoftTeams 가 그렇게 깔렸다(2026-08-17).
+
+    이름으로 맞히는 대신 <b>환경 변수를 먼저 본다</b> — 조직명을 타지 않아 정확하다.
+    없을 때만 이름 규칙으로 떨어진다.
+#>
+function Test-TeavelUnderOneDrive {
+    param([string] $Path)
+
+    if (-not $Path) { return $false }
+
+    foreach ($root in @($env:OneDrive, $env:OneDriveCommercial, $env:OneDriveConsumer)) {
+        if ($root -and $Path -like "$root*") { return $true }
+    }
+
+    # 환경 변수가 없을 때의 버팀목. 'OneDrive' 와 'OneDrive - 조직명' 을 모두 잡는다.
+    return ($Path -match '\\OneDrive( - [^\\]+)?\\')
+}
 
 <#
 .SYNOPSIS
@@ -53,7 +94,7 @@ function Get-TeavelModuleDirectory {
 
     # 내 계정 아래이면서 OneDrive 가 아닌 것
     $mine = $candidates | Where-Object {
-        $_ -like "*\Users\$env:USERNAME\*" -and $_ -notmatch '\\OneDrive\\'
+        $_ -like "*\Users\$env:USERNAME\*" -and -not (Test-TeavelUnderOneDrive $_)
     } | Select-Object -First 1
 
     if ($mine) { return $mine }
@@ -260,7 +301,7 @@ function Install-TeavelM365Module {
             try {
                 $userScope = @($env:PSModulePath -split [IO.Path]::PathSeparator |
                                Where-Object { $_ -like "*\Users\$env:USERNAME\*" } | Select-Object -First 1)
-                $defaultsToOneDrive = ($userScope -and $userScope[0] -match '\\OneDrive\\')
+                $defaultsToOneDrive = ($userScope -and (Test-TeavelUnderOneDrive $userScope[0]))
             } catch { }
 
             $ok = $false
@@ -1091,7 +1132,152 @@ function Remove-TeavelM365Group {
     New-TeavelResult -Message "'$($g.DisplayName)' 을(를) 지웠습니다." -Details $what
 }
 
+# ═══════════════════════════ 학번 읽기 · 묶음 ═══════════════════════════
+
+<#
+.SYNOPSIS
+    표시 이름에서 학년·반·번호·이름을 뽑는다. 테넌트를 건드리지 않는다.
+.DESCRIPTION
+    <b>디렉터리 속성으로는 아무것도 가를 수 없다.</b> 실제 학교 테넌트 395명에서
+    `Department`·`Title`·`City` 가 채워진 사람은 0명이었다(2026-08-19, nprm.goe.go.kr).
+
+    대신 표시 이름에 학번이 박혀 있었다.
+
+        10101강민서   ->  1학년 01반 01번 강민서
+        30410박다움   ->  3학년 04반 10번 박다움
+
+    정규식 하나로 210명이 풀렸고, 팀 구성원 수와 교차검증도 맞았다
+    (`3학년_과학` 203명 = 학번 3학년 202 + 소유자 1).
+
+    ■ 이 값은 '지금 학년' 이 아니다
+
+    학번은 계정을 만들 때 찍힌 값이라, 매년 고쳐 주지 않으면 그대로 남는다.
+    `30101` 이 올해 3학년이라는 뜻이 <b>아니다.</b> 그래서 이 함수는 학년을 읽어 줄 뿐
+    <b>졸업생인지 판정하지 않는다.</b> 판정은 사람이 한다.
+.PARAMETER Pattern
+    학번 형식. 학교마다 다를 수 있어 밖에서 받는다. 기본은 학년1+반2+번호2.
+.EXAMPLE
+    Get-TeavelTenantUser | Get-TeavelStudentId
+#>
+function Get-TeavelStudentId {
+    [CmdletBinding()]
+    param(
+        # 파이프라인으로 받는다. 이걸 빠뜨리면 조용히 빈 결과가 나온다(실기에서 당했다).
+        [Parameter(Mandatory, ValueFromPipeline, ValueFromPipelineByPropertyName)]
+        [AllowEmptyString()]
+        [string] $DisplayName,
+
+        [string] $Pattern = '^(?<g>[1-9])(?<k>\d{2})(?<n>\d{2})(?<p>.+)$'
+    )
+
+    process {
+        $name = if ($null -eq $DisplayName) { '' } else { $DisplayName.Trim() }
+
+        if ($name -match $Pattern) {
+            [PSCustomObject]@{
+                DisplayName = $DisplayName
+                HasId       = $true
+                StudentId   = $Matches['g'] + $Matches['k'] + $Matches['n']
+                Grade       = [int] $Matches['g']
+                Class       = [int] $Matches['k']
+                Number      = [int] $Matches['n']
+                PersonName  = $Matches['p'].Trim()
+            }
+        }
+        else {
+            [PSCustomObject]@{
+                DisplayName = $DisplayName
+                HasId       = $false
+                StudentId   = ''
+                Grade       = $null
+                Class       = $null
+                Number      = $null
+                PersonName  = $name
+            }
+        }
+    }
+}
+
+<#
+.SYNOPSIS
+    학번으로 학년·반 묶음을 만든다. 테넌트를 건드리지 않는다.
+.DESCRIPTION
+    졸업생 정리는 <b>학년 단위</b>로 벌어진다. 202명을 한 명씩 체크하는 화면은
+    그 앞에서 무용지물이다. 그래서 묶어서 고를 수 있게 한다.
+
+    ■ 묶음마다 계정 생성 연도를 함께 준다
+
+    학번은 만든 때의 학년이라 그것만으로는 졸업 여부를 알 수 없다. 생성 연도가 있어야
+    사람이 읽어 낼 수 있다 — 실기에서 '3학년 202명 중 199명이 2025년 생성' 이라는 사실이
+    2025학년도 3학년 = 2026년 2월 졸업이라는 판단의 근거가 됐다.
+
+    <b>이 함수는 졸업생을 고르지 않는다.</b> 근거를 늘어놓을 뿐이다.
+    "졸업생 202명을 찾았습니다" 라고 말하는 순간 그 도구는 위험해진다.
+.PARAMETER Users
+    DisplayName 을 가진 개체들. WhenCreated 가 있으면 생성 연도로 쓴다.
+#>
+function Get-TeavelCohort {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $Users,
+        [string] $Pattern = '^(?<g>[1-9])(?<k>\d{2})(?<n>\d{2})(?<p>.+)$'
+    )
+
+    # 대소문자를 구분해 센다.
+    #
+    # PowerShell 의 @{} 는 기본이 대소문자 무시라, 'Test' 와 'TEST' 가 한 칸에 합쳐진다.
+    # 실기에서 두 그룹이 한 줄로 합쳐져 구성원 수가 배로 보였다. 세는 곳에서는 반드시 구분한다.
+    $buckets = New-Object 'System.Collections.Hashtable' ([StringComparer]::Ordinal)
+    $order = New-Object System.Collections.Generic.List[string]
+
+    foreach ($u in @($Users)) {
+        $display = [string] $u.DisplayName
+        $id = $display | Get-TeavelStudentId -Pattern $Pattern
+
+        # 한글이 붙은 보간은 변수명으로 읽힌다 — "$g학년" 은 $g학년 이라는 변수다.
+        # 반드시 중괄호로 감싼다.
+        $key = if ($id.HasId) { "grade:$($id.Grade)|class:$($id.Class)" } else { 'none' }
+
+        if (-not $buckets.ContainsKey($key)) {
+            $buckets[$key] = [PSCustomObject]@{
+                Kind    = if ($id.HasId) { 'class' } else { 'none' }
+                Grade   = $id.Grade
+                Class   = $id.Class
+                Label   = if ($id.HasId) { "$($id.Grade)학년 $($id.Class)반" } else { '학번 없음' }
+                Members = New-Object System.Collections.Generic.List[object]
+                Years   = New-Object System.Collections.Generic.List[int]
+            }
+            $order.Add($key)
+        }
+
+        [void] $buckets[$key].Members.Add($id)
+
+        $when = $u.WhenCreated
+        if ($when -is [datetime]) { [void] $buckets[$key].Years.Add($when.Year) }
+    }
+
+    foreach ($key in $order) {
+        $b = $buckets[$key]
+
+        # @($list) 는 List[object] 를 펼치지 못하고 통째로 한 칸에 넣는다.
+        # ToArray() 를 거쳐야 한다 — 실기에서 여기서 수가 1로 나왔다.
+        $members = $b.Members.ToArray()
+        $years = @($b.Years.ToArray() | Sort-Object -Unique)
+
+        [PSCustomObject]@{
+            Kind         = $b.Kind
+            Grade        = $b.Grade
+            Class        = $b.Class
+            Label        = $b.Label
+            Count        = $members.Count
+            CreatedYears = $years
+            Members      = $members
+        }
+    }
+}
+
 Export-ModuleMember -Function `
+    Test-TeavelUnderOneDrive, Get-TeavelStudentId, Get-TeavelCohort, `
     Get-TeavelModuleDirectory, Get-TeavelM365Readiness, Install-TeavelM365Module, `
     Install-TeavelModuleFromGallery, Connect-TeavelM365, Invoke-TeavelWrite, `
     Connect-TeavelTeamsByCode, `

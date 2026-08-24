@@ -355,6 +355,17 @@ public sealed class TeavelSession : IAsyncDisposable
         return flow.RunAsync(ct);
     }
 
+    /// <summary>앱 하나만 잇는다 — "아웃룩 계정 연결해줘" 처럼 콕 집어 말씀하셨을 때.</summary>
+    public Task<int> RunOneAppAsync(string app, CancellationToken ct)
+    {
+        var facts = new WindowsFacts(_registry, _paths);
+        var flow = new AccountFlow(
+            facts, new EdgeFacts(_paths), new OneDriveDetail(facts, _paths),
+            _tools, _proc, _registry, AssumeYes);
+
+        return flow.RunOneAppAsync(app, ct);
+    }
+
     /// <summary>선생님을 이름으로 찾아 계정을 알려 준다.</summary>
     public Task<int> RunFindTeacherAsync(string? name, CancellationToken ct)
         => M365Flow.FindTeacherAsync(_tools, name, ct);
@@ -578,6 +589,14 @@ public sealed class TeavelSession : IAsyncDisposable
 
             case "accounts":
                 await RunAccountAsync(ct).ConfigureAwait(false);
+                return;
+
+            // 앱 하나만 콕 집어 말씀하신 경우.
+            case "account.edge":
+            case "account.outlook":
+            case "account.onedrive":
+            case "account.office":
+                await RunOneAppAsync(tool.Function["account.".Length..], ct).ConfigureAwait(false);
                 return;
 
             case "remove":

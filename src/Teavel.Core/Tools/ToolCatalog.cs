@@ -67,13 +67,66 @@ public static class ToolCatalog
             Function: "accounts",
             Mutating: false)
         {
+            // 앱 이름은 여기 두지 않는다 — 그 말은 앱별 도구(setup.connect_*)로 가야 한다.
+            // 둘 다 갖고 있으면 "엣지에 학교 계정 넣어줘" 가 전체 흐름으로 끌려간다.
+            // 틀린 답은 아니지만, 하나만 해 달라고 한 분에게 다섯 단계를 보여 주는 셈이다.
             Aliases = new[]
             {
-                "계정 연결", "계정", "로그인", "학교 계정", "계정 잇기", "처음 세팅", "초기 세팅",
-                "원드라이브", "onedrive", "동기화", "백업 폴더", "엣지", "edge", "브라우저",
-                "오피스 로그인", "메일 설정", "아웃룩 설정",
+                "계정 연결", "계정", "로그인", "학교 계정", "계정 잇기",
+                "처음 세팅", "초기 세팅", "세팅", "전체 연결", "다 연결",
             },
         },
+
+        // ── 앱 하나만 ──
+        //
+        // "아웃룩 계정 연결해줘" 처럼 콕 집어 말씀하시는 일이 잦다. 예전에는 이런 말도
+        // 전체 계정 흐름으로 갔는데, 틀린 답은 아니어도 <b>말을 알아듣지 못한 것</b>과 같다.
+        // 하나만 해 달라고 한 분에게 다섯 단계를 보여 주는 셈이라서다.
+        new ToolSpec(
+            Id: "setup.connect_outlook",
+            Title: "아웃룩에 학교 메일 연결하기",
+            Category: ToolCategory.Setup,
+            Description: "아웃룩이 학교 계정을 쓰도록 해 둡니다. 처음 켤 때 메일 계정이 저절로 만들어집니다.",
+            Examples: new[] { "아웃룩 계정 연결해줘", "outlook 계정 연결해줘", "학교 메일 받게 해줘" },
+            Parameters: Array.Empty<ToolParam>(),
+            Module: "@flow", Function: "account.outlook", Mutating: true)
+        { Aliases = new[] { "아웃룩", "outlook", "메일", "학교 메일", "메일 계정" } },
+
+        new ToolSpec(
+            Id: "setup.connect_edge",
+            Title: "Edge에 학교 계정 연결하기",
+            Category: ToolCategory.Setup,
+            Description: "Edge 가 학교 계정으로 업무 프로필을 만들게 해 둡니다. "
+                       + "나이스·업무포털이 로그인 없이 열립니다.",
+            Examples: new[] { "엣지에 학교 계정 넣어줘", "edge 로그인 해줘", "나이스 로그인 없이 열리게 해줘" },
+            Parameters: Array.Empty<ToolParam>(),
+            Module: "@flow", Function: "account.edge", Mutating: true)
+        // 앱 이름만 두면 "엣지에 학교 계정 넣어줘" 가 전체 흐름에 진다 —
+        // 그 말에는 '학교 계정' 이 함께 들어 있어서 그쪽 겹침이 더 크기 때문이다.
+        // 앱 이름이 붙은 형태를 함께 적어 둔다.
+        { Aliases = new[] { "엣지", "edge", "브라우저", "나이스", "업무포털",
+                            "엣지 계정", "edge 계정", "엣지 로그인", "edge 로그인" } },
+
+        new ToolSpec(
+            Id: "setup.connect_onedrive",
+            Title: "원드라이브에 학교 계정 연결하기",
+            Category: ToolCategory.Setup,
+            Description: "원드라이브가 학교 계정으로 알아서 로그인하게 해 둡니다. "
+                       + "바탕 화면·문서·사진 백업도 함께 켭니다.",
+            Examples: new[] { "원드라이브 연결해줘", "onedrive 설정해줘", "자료 백업되게 해줘" },
+            Parameters: Array.Empty<ToolParam>(),
+            Module: "@flow", Function: "account.onedrive", Mutating: true)
+        { Aliases = new[] { "원드라이브", "onedrive", "백업", "동기화", "자료 백업" } },
+
+        new ToolSpec(
+            Id: "setup.connect_office",
+            Title: "오피스에 학교 계정 연결하기",
+            Category: ToolCategory.Setup,
+            Description: "워드·엑셀이 학교 계정을 쓰도록 안내합니다. 정품 인증이 됩니다.",
+            Examples: new[] { "오피스 로그인 해줘", "엑셀 정품 인증 해줘", "워드 로그인" },
+            Parameters: Array.Empty<ToolParam>(),
+            Module: "@flow", Function: "account.office", Mutating: true)
+        { Aliases = new[] { "오피스", "office", "워드", "엑셀", "정품 인증" } },
 
         new ToolSpec(
             Id: "teavel.install",
@@ -681,21 +734,19 @@ public static class ToolCatalog
             Id: "setup.rename_computer",
             Title: "컴퓨터 이름 바꾸기",
             Category: ToolCategory.Setup,
-            Description: "컴퓨터 이름을 새로 정합니다. 관리자 확인 창이 한 번 뜨고, "
-                       + "다시 시작해야 적용됩니다. 학교가 관리하는 컴퓨터는 바꾸지 않습니다.",
+            // 예전에는 이름을 받아 우리가 직접 바꿨다. 그러면서 규칙 검사도 우리가 했는데,
+            // 한글을 막은 것이 문제였다 — <b>Windows 는 받아 주는 이름을 Teavel 만 거부</b>했다.
+            // 우리가 Windows 보다 엄격할 까닭이 없어서 화면을 열어 주는 쪽으로 바꿨다.
+            Description: "컴퓨터 이름을 바꾸는 설정 화면을 엽니다. 이름은 직접 정하시면 됩니다. "
+                       + "다시 시작해야 적용됩니다.",
             Examples: new[]
             {
                 "컴퓨터 이름 바꿔줘",
-                "PC 이름을 2-3-kimminsu 로 바꿔줘",
-                "장치 이름 새로 정하고 싶어",
+                "PC 이름 새로 정하고 싶어",
+                "장치 이름 바꾸는 데가 어디야",
             },
-            Parameters: new[]
-            {
-                new ToolParam("NewName", ToolParamKind.Text, "새 컴퓨터 이름",
-                    "영문자·숫자·붙임표(-) 만, 15자 이내. 한글은 쓸 수 없습니다. "
-                  + "예: 2-3-kimminsu, sci-lab-01"),
-            },
-            Module: "Teavel.Setup", Function: "Set-TeavelComputerName", Mutating: true, TimeoutSeconds: 180)
+            Parameters: Array.Empty<ToolParam>(),
+            Module: "Teavel.Setup", Function: "Open-TeavelComputerNameSetting", Mutating: false, TimeoutSeconds: 60)
             { Aliases = new[] { "컴퓨터 이름", "이름 바꾸기", "장치 이름", "PC 이름" } },
     };
 }

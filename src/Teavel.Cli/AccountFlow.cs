@@ -103,6 +103,90 @@ public sealed class AccountFlow
         return 0;
     }
 
+    /// <summary>
+    /// 앱 <b>하나만</b> 잇는다 — "아웃룩 계정 연결해줘" 처럼 콕 집어 말씀하셨을 때.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 예전에는 이런 말도 전체 계정 흐름으로 갔다. 틀린 답은 아니지만, 아웃룩 하나만
+    /// 해 달라고 한 분에게 다섯 단계를 보여 주는 것은 <b>말을 알아듣지 못한 것</b>과 같다.
+    /// </para>
+    /// <para>
+    /// 여기서도 <b>할 수 있는 것은 대신 한다.</b> 안내문을 읽히는 것이 아니라 설정을 심고,
+    /// 그다음 앱을 띄운다. 계정이 Windows 에 붙어 있으면 그것으로 끝난다.
+    /// </para>
+    /// </remarks>
+    /// <param name="app">edge · outlook · onedrive · office 중 하나.</param>
+    public async Task<int> RunOneAppAsync(string app, CancellationToken ct)
+    {
+        if (!OperatingSystem.IsWindows()) { Ui.Error("Windows 에서만 할 수 있습니다."); return 2; }
+
+        var title = app switch
+        {
+            "edge" => "Edge",
+            "outlook" => "아웃룩",
+            "onedrive" => "원드라이브",
+            _ => "오피스",
+        };
+
+        Ui.Title($"{title} 에 학교 계정 잇기");
+
+        // 뿌리가 없으면 앱만 붙들어도 소용없다. 그 사실부터 말한다.
+        var state = await AccountStateAsync(ct).ConfigureAwait(false);
+        if (!state.Connected)
+        {
+            Ui.Warn("Windows 에 학교 계정이 아직 안 이어져 있습니다.");
+            Ui.Dim("      그것부터 하시면 이 앱은 대개 저절로 따라옵니다.");
+            Console.WriteLine();
+
+            if (!_assumeYes && !Ui.Confirm("      계정 연결부터 할까요?"))
+            {
+                Ui.Info("그럼 이 앱만 손으로 이으셔야 합니다.");
+                ExplainPerAppFallback();
+                return 0;
+            }
+
+            return await RunAsync(ct).ConfigureAwait(false);
+        }
+
+        _tenantId = state.Tenant;
+
+        // 이미 돼 있으면 건드리지 않는다.
+        var now = AppStates().FirstOrDefault(s => s.Title == title);
+        if (now is { Applicable: false })
+        {
+            Ui.Info($"{title} 이(가) 이 컴퓨터에 없습니다.");
+            return 0;
+        }
+        if (now is { Connected: true })
+        {
+            Ui.Ok($"이미 이어져 있습니다 — {now.Note}");
+            return 0;
+        }
+
+        switch (app)
+        {
+            case "onedrive":
+                OfferOneDriveAutoSignIn(windowsConnected: true);
+                OpenOneDriveSignIn();
+                break;
+
+            case "office":
+                // 오피스는 심을 값이 마땅치 않다. Windows 계정이 있으면 대개 따라온다.
+                OpenOffice();
+                break;
+
+            default:
+                AutoConnectApps();
+                if (app == "edge") OpenEdge(); else OpenOutlook();
+                break;
+        }
+
+        Console.WriteLine();
+        Ui.Info("'계정' 을 실행하면 전체 상태를 한눈에 보실 수 있습니다.");
+        return 0;
+    }
+
     // ─────────────────────────────── 지금 상태 ───────────────────────────────
 
     /// <summary>지금 무엇이 이어져 있는지 한눈에. Windows 계정이 이어져 있으면 true.</summary>
@@ -110,8 +194,20 @@ public sealed class AccountFlow
     {
         Ui.Title("지금 상태");
 
-        var windows = await IsWindowsConnectedAsync(ct).ConfigureAwait(false);
-        var states = new List<AccountState> { new("Windows 계정", windows, windows ? "연결돼 있습니다" : "아직 연결 안 됐습니다") };
+        // 어떤 방식으로 붙었는지까지 본다. '붙었다' 로 뭉개면 계정만 추가된 컴퓨터가
+        // 장치까지 연결된 것처럼 보인다 — 학교가 이 컴퓨터를 관리하느냐가 갈리는 차이다.
+        var state = await AccountStateAsync(ct).ConfigureAwait(false);
+        var windows = state.Connected;
+
+        var note = state.Kind switch
+        {
+            "device" => "이 컴퓨터가 학교에 연결돼 있습니다 (장치 연결)",
+            "domain" => "교내 도메인에 가입돼 있습니다",
+            "workplace" => "학교 계정이 추가돼 있습니다 (앱 연결 — 장치 연결은 아닙니다)",
+            _ => "아직 연결 안 됐습니다",
+        };
+
+        var states = new List<AccountState> { new("Windows 계정", windows, note) };
         states.AddRange(AppStates());
 
         foreach (var s in states)
@@ -313,8 +409,116 @@ public sealed class AccountFlow
         }
 
         Console.Write('\r');
-        Ui.Warn("아직 연결되지 않았습니다. 나중에 '계정' 을 다시 실행하시면 이어서 합니다.");
+        Ui.Warn("아직 연결되지 않았습니다.");
+        await ExplainFailureAsync(ct).ConfigureAwait(false);
         return false;
+    }
+
+    /// <summary>
+    /// 왜 안 됐는지 <b>Windows 가 적어 둔 것을 읽어</b> 알려 준다.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 설정 화면은 실패해도 까닭을 말해 주지 않는다. 그런데 Windows 는 이벤트 로그에
+    /// 다 적어 둔다 — 우리가 짐작할 일이 아니라 읽을 일이었다.
+    /// </para>
+    /// <para>
+    /// 실기에서 이렇게 나왔다(Home 판): 결합은 성공했는데 자동 MDM 등록이
+    /// <c>0x80180014</c> 로 실패하고, 그 바람에 계정 추가가 통째로 롤백됐다.
+    /// 화면에는 아무 말도 없어서 '업데이트를 안 해서 그런가' 하고 한나절을 엉뚱한 데 썼다.
+    /// </para>
+    /// <para>
+    /// <b>코드를 보고 사연을 지어내지 않는다.</b> 뜻이 분명한 것만 풀어 쓰고 나머지는
+    /// 코드와 원문을 그대로 보여 준다.
+    /// </para>
+    /// </remarks>
+    private async Task ExplainFailureAsync(CancellationToken ct)
+    {
+        var res = await _tools.InvokeAsync(
+            "Teavel.Setup", "Get-TeavelAccountErrors", new Dictionary<string, object>(),
+            120, "연결 오류 확인", ct).ConfigureAwait(false);
+
+        var errors = res.Details
+            .Where(d => d.StartsWith("err=", StringComparison.Ordinal))
+            .Select(d => d["err=".Length..])
+            .ToList();
+
+        if (errors.Count == 0)
+        {
+            Ui.Dim("      나중에 '계정' 을 다시 실행하시면 이어서 합니다.");
+            return;
+        }
+
+        Console.WriteLine();
+        Ui.Plain("      Windows 가 적어 둔 것:");
+        foreach (var e in errors.Take(5))
+        {
+            // 셋으로만 가른다 — 메시지 안에 '|' 가 들어 있어도 잘리지 않게.
+            var parts = e.Split('|', 3);
+            if (parts.Length == 3) Ui.Dim($"        {parts[1]}  {parts[0]}  {parts[2]}");
+        }
+
+        // 뜻이 분명한 것 하나. 학교 컴퓨터에서 가장 자주 걸리는 자리다.
+        if (errors.Any(e => e.StartsWith("0X80180014", StringComparison.OrdinalIgnoreCase)))
+        {
+            Console.WriteLine();
+            Ui.Warn("이 컴퓨터에서는 학교 계정을 붙일 수 없습니다 — 학교 쪽 설정 때문입니다.");
+            Ui.Plain("""
+                  계정과 비밀번호는 맞았습니다. 연결까지 됐다가 되돌려진 것입니다.
+
+                  학교가 '기기 자동 등록(MDM)' 을 켜 두면, 계정을 붙이는 순간 이 컴퓨터를
+                  학교 관리 대상으로 등록하려고 합니다. 그런데 Windows Home 판에는
+                  그 기능이 아예 없어서 실패하고, 그 바람에 계정 추가까지 취소됩니다.
+
+                  선생님이 하실 수 있는 일이 아닙니다. 전산 담당 선생님께 전해 주세요.
+            """);
+            Console.WriteLine();
+            Ui.Plain("      ── 전산 담당 선생님께 ──");
+            Ui.Dim("        Entra 관리 센터 (또는 portal.azure.com → Microsoft Entra ID)");
+            Ui.Dim("          → Mobility (MDM and MAM) → Microsoft Intune");
+            Ui.Dim("          → MDM user scope 를 '없음' 으로, 또는 이 선생님을 뺀 그룹으로");
+            Console.WriteLine();
+            Ui.Dim("        이 학교에서 실제로 이렇게 풀렸습니다. Education 판으로 올려도 됩니다");
+            Ui.Dim("        (Home 판에 MDM 기능이 없는 것이 원인이므로).");
+            Console.WriteLine();
+            Ui.Dim("      같은 이미지로 세팅한 컴퓨터라면 다른 선생님들도 똑같이 막힙니다.");
+
+            ExplainPerAppFallback();
+            return;
+        }
+
+        Console.WriteLine();
+        Ui.Dim("      까닭은 코드마다 다릅니다. 위 줄을 그대로 전산 담당 선생님께 보여 주세요.");
+
+        ExplainPerAppFallback();
+    }
+
+    /// <summary>
+    /// Windows 에 못 붙일 때 — <b>앱마다 따로 로그인하면 대부분 쓸 수 있다.</b>
+    /// </summary>
+    /// <remarks>
+    /// 계정을 Windows 에 잇는 것이 편하긴 하지만 <b>그것이 유일한 길은 아니다.</b>
+    /// 학교 쪽 설정이 풀릴 때까지 아무것도 못 하고 기다리게 두면, 그동안 수업 자료를
+    /// 어디에도 못 올린다. 앱마다 같은 계정으로 로그인하면 원드라이브도 오피스도 돌아간다 —
+    /// 비밀번호를 여러 번 넣어야 하는 것이 번거로울 뿐이다.
+    /// </remarks>
+    private static void ExplainPerAppFallback()
+    {
+        Console.WriteLine();
+        Ui.Info("그동안은 앱마다 따로 로그인하시면 됩니다. 그래도 대부분 쓸 수 있습니다.");
+        Ui.Plain("""
+              Windows 에 잇는 것이 편할 뿐이지, 그것 없이도 됩니다.
+              같은 학교 계정으로 앱마다 로그인하시면 됩니다.
+
+                원드라이브   실행 → 학교 메일 주소로 로그인 → 자료 백업됩니다
+                워드·엑셀    오른쪽 위 [로그인] → 같은 주소 → 정품 인증됩니다
+                아웃룩       계정 추가 → 같은 주소 → 학교 메일 받습니다
+                Edge         오른쪽 위 사람 아이콘 → 같은 주소 → 나이스가 열립니다
+                팀즈         실행 → 같은 주소
+
+              번거로운 것은 비밀번호를 앱마다 넣어야 한다는 것뿐입니다.
+              나중에 학교 쪽 설정이 풀리면 '계정' 을 다시 실행해 주세요.
+        """);
     }
 
     /// <summary>Enter 를 누르셨는지. 입력이 콘솔이 아니면 언제나 false.</summary>
@@ -329,19 +533,21 @@ public sealed class AccountFlow
     }
 
     /// <summary>지금 계정 상태 — 지켜보기용이라 안내문을 만들지 않는 가벼운 쪽을 부른다.</summary>
-    private async Task<(bool Connected, string? Tenant, string? Account)> AccountStateAsync(CancellationToken ct)
+    private async Task<(bool Connected, string Kind, string? Tenant, string? Account)> AccountStateAsync(
+        CancellationToken ct)
     {
         var res = await _tools.InvokeAsync(
             "Teavel.Setup", "Get-TeavelAccountState", new Dictionary<string, object>(),
             60, "계정 상태", ct).ConfigureAwait(false);
 
-        if (!res.Ok) return (false, null, null);
+        if (!res.Ok) return (false, "none", null, null);
 
         var connected = res.Details.Any(d => d.Equals("connected=True", StringComparison.OrdinalIgnoreCase));
+        var kind = Value(res.Details, "kind=") ?? "none";
         var tenant = Value(res.Details, "tenant=");
         var account = Value(res.Details, "account=");
 
-        return (connected, tenant, account);
+        return (connected, kind, tenant, account);
 
         static string? Value(IEnumerable<string> lines, string prefix)
             => lines.FirstOrDefault(d => d.StartsWith(prefix, StringComparison.Ordinal)) is { } hit
@@ -506,7 +712,16 @@ public sealed class AccountFlow
         if (windowsConnected)
         {
             Ui.Dim("      Windows 에는 이었는데 아직 안 따라온 것들입니다.");
-            Ui.Dim("      대개 앱을 한 번 열어 주면 알아서 이어집니다.");
+
+            // 손으로 로그인시키기 전에, 대신 해 줄 수 있는 것부터 한다.
+            // 클릭 순서를 알려 주는 것과 대신 해 주는 것은 전혀 다른 일이다.
+            AutoConnectApps();
+
+            pending = AppStates().Where(s => s.Applicable && !s.Connected).ToList();
+            if (pending.Count == 0) return;
+
+            Console.WriteLine();
+            Ui.Dim("      남은 것은 앱을 한 번 열어 주셔야 이어집니다.");
         }
         else
         {
@@ -522,6 +737,88 @@ public sealed class AccountFlow
                 case "원드라이브": OpenOneDriveSignIn(); break;
                 case "오피스": OpenOffice(); break;
                 case "아웃룩": OpenOutlook(); break;
+            }
+        }
+    }
+
+    // ─────────────────── 앱을 대신 이어 준다 ───────────────────
+
+    private const string EdgePolicyKey = @"SOFTWARE\Policies\Microsoft\Edge";
+    private const string OutlookAutoDiscoverKey = @"Software\Microsoft\Office\16.0\Outlook\AutoDiscover";
+
+    /// <summary>
+    /// 앱이 Windows 계정을 <b>알아서 물어다 쓰게</b> 해 둔다.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 클릭 순서를 알려 주는 것과 대신 해 주는 것은 전혀 다른 일이다.
+    /// <b>대부분의 선생님은 이것도 못 하신다</b> — 못 하는 게 당연하다.
+    /// </para>
+    /// <para>
+    /// 비밀번호를 넣어 드리는 것이 아니다. Windows 에 이미 붙은 계정을 앱들이 가져다
+    /// 쓰게 만드는 것이라, <b>계정이 붙어 있어야만 된다.</b> 그래서 이 단계는 ① 다음이다.
+    /// </para>
+    /// <para>
+    /// 정책을 건드리는 일이라 한 번 여쭙는다. 다만 앱마다 묻지는 않는다 —
+    /// 다섯 번 묻는 것은 안 묻느니만 못하다.
+    /// </para>
+    /// </remarks>
+    private void AutoConnectApps()
+    {
+        var plans = new List<(string Title, string What, bool NeedsAdmin)>();
+
+        var edgeTodo = _edge.Installed && _edge.SchoolProfile() is null
+                    && _reg.ReadDword(RegistryRoot.LocalMachine, EdgePolicyKey, "NonRemovableProfileEnabled") != 1;
+
+        var outlookTodo = _facts.HasComProgId("Outlook.Application") && !_facts.HasOutlookProfile
+                       && _reg.ReadDword(RegistryRoot.CurrentUser, OutlookAutoDiscoverKey, "ZeroConfigExchange") != 1;
+
+        if (edgeTodo) plans.Add(("Edge", "학교 계정으로 업무 프로필을 자동으로 만듭니다", true));
+        if (outlookTodo) plans.Add(("아웃룩", "처음 켤 때 메일 계정을 알아서 만듭니다", false));
+
+        if (plans.Count == 0) return;
+
+        Console.WriteLine();
+        Ui.Info("이 중 몇 가지는 제가 대신 해 둘 수 있습니다.");
+        foreach (var p in plans)
+            Ui.Dim($"        {Ui.Pad(p.Title, 10)} {p.What}{(p.NeedsAdmin ? "  (관리자 승인 필요)" : "")}");
+
+        Console.WriteLine();
+        Ui.Dim("      앱을 여는 대신 설정만 해 둡니다. 다음에 그 앱을 켜면 알아서 이어집니다.");
+
+        if (!_assumeYes && !Ui.Confirm("      해 둘까요?")) { Ui.Info("그냥 두겠습니다."); return; }
+
+        Console.WriteLine();
+
+        if (outlookTodo)
+        {
+            // HKCU 라 권한이 필요 없다.
+            if (_reg.WriteDword(RegistryRoot.CurrentUser, OutlookAutoDiscoverKey, "ZeroConfigExchange", 1))
+                Ui.Ok("아웃룩 — 처음 켜면 학교 메일 계정을 알아서 만듭니다.");
+            else
+                Ui.Warn("아웃룩 설정을 쓰지 못했습니다.");
+        }
+
+        if (edgeTodo)
+        {
+            if (!Elevation.IsElevated)
+            {
+                Ui.Warn("Edge 는 컴퓨터 전체 설정이라 관리자 권한이 필요합니다.");
+                Ui.Dim(Elevation.CanElevate
+                    ? "        '계정' 을 관리자 권한으로 다시 실행하시면 이것도 해 둡니다."
+                    : "        이 계정은 관리자가 아니라 할 수 없습니다. 아래 안내대로 직접 해 주세요.");
+            }
+            // 로그인을 <b>강제</b>하지는 않는다(BrowserSignin=2). 계정에 문제가 생기면
+            // Edge 를 아예 못 쓰게 되는데, 그건 우리가 만들 상태가 아니다.
+            // 업무 프로필 자동 생성만 켠다.
+            else if (_reg.WriteDword(RegistryRoot.LocalMachine, EdgePolicyKey, "NonRemovableProfileEnabled", 1))
+            {
+                Ui.Ok("Edge — 다음에 켜면 학교 계정으로 업무 프로필이 만들어집니다.");
+                Ui.Dim("        나이스·업무포털이 로그인 없이 열립니다.");
+            }
+            else
+            {
+                Ui.Warn("Edge 설정을 쓰지 못했습니다.");
             }
         }
     }

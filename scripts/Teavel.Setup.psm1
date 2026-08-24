@@ -271,6 +271,77 @@ function Open-TeavelAccountSetting {
 
 <#
 .SYNOPSIS
+    학교 계정 연결이 왜 실패했는지 Windows 가 적어 둔 것을 읽어 온다. 아무것도 바꾸지 않는다.
+.DESCRIPTION
+    <b>Windows 는 까닭을 이미 적어 둔다.</b> 우리가 짐작할 일이 아니라 읽을 일이다.
+
+    실기에서 이렇게 나왔다(2026-08-19, Home 판):
+
+        결합 요청이 서버로 보내졌습니다
+        완전한 결합 응답 작업이 성공했습니다          ← 계정 연결 자체는 성공
+        0x80180014  MDM 서버가 이 플랫폼 또는 버전을 지원하지 않습니다
+        0x8AA500AE  Uncommitted add account transaction found, rolling back
+        등록 상태가 장치에서 삭제되었습니다            ← 통째로 되돌려짐
+
+    계정도 비밀번호도 맞았는데 자동 MDM 등록이 따라붙었고, Home 판에는 그 기능이 없어
+    실패했으며, 그 바람에 계정 추가가 통째로 롤백됐다. 화면에는 아무 까닭도 안 나온다.
+    그래서 '업데이트를 안 해서 그런가' 하고 한나절을 엉뚱한 데 썼다.
+
+    ■ 코드를 보고 사연을 지어내지 않는다
+
+    뜻이 분명한 것만 풀어 쓰고, 나머지는 코드와 원문을 그대로 보여 준다.
+    같은 코드가 여러 사연을 가리키는 일이 흔하다.
+#>
+function Get-TeavelAccountErrors {
+    param(
+        # 최근 몇 시간 안의 것만 볼지.
+        [int] $Hours = 24
+    )
+
+    $d = New-Object System.Collections.Generic.List[string]
+    $since = (Get-Date).AddHours(-$Hours)
+    $found = 0
+
+    foreach ($log in 'Microsoft-Windows-AAD/Operational',
+                     'Microsoft-Windows-User Device Registration/Admin') {
+        try {
+            $events = Get-WinEvent -FilterHashtable @{
+                LogName   = $log
+                Level     = 1, 2, 3          # 위험·오류·경고
+                StartTime = $since
+            } -MaxEvents 40 -ErrorAction Stop
+
+            foreach ($e in $events) {
+                $first = ($e.Message -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1)
+                if (-not $first) { continue }
+
+                # 'Error: 0x80180014 …' 꼴에서 코드를 뽑는다.
+                $code = ''
+                if ($first -match '(0x[0-9A-Fa-f]{8})') { $code = $Matches[1].ToUpper() }
+                if (-not $code) { continue }
+
+                # 성공을 알리는 줄이 경고 수준으로 찍히는 것들이 있다
+                # ('0x8AA50131 Clientid normalization update succeeded.' 처럼).
+                # 그대로 '오류' 라고 내보내면 엉뚱한 데를 보게 된다.
+                if ($first -match '(?i)\bsucceed|\bsuccess|성공') { continue }
+
+                $found++
+                $d.Add("err=$code|$($e.TimeCreated.ToString('MM-dd HH:mm'))|$($first.Trim())")
+            }
+        } catch {
+            # 로그가 없거나 읽을 권한이 없을 수 있다. 못 읽은 것과 '문제 없음' 은 다르다.
+            $d.Add("noread=$log")
+        }
+    }
+
+    $msg = if ($found -gt 0) { "최근 $Hours 시간 안에 연결 오류 $found 건이 있습니다." }
+           else { '최근 연결 오류는 없습니다.' }
+
+    New-TeavelResult -Message $msg -Details $d
+}
+
+<#
+.SYNOPSIS
     학교 계정이 붙었는지만 짧게 알려준다. 아무것도 바꾸지 않는다.
 .DESCRIPTION
     Get-TeavelAccountGuide 는 긴 안내문까지 만든다. 이 함수는 <b>지켜보기 위한 것</b>이라
@@ -289,9 +360,22 @@ function Get-TeavelAccountState {
     $tenant = ''
     $accounts = New-Object System.Collections.Generic.List[string]
 
+    # 어떤 방식으로 붙었는지. <b>'붙었다' 로 뭉개면 안 된다.</b>
+    #
+    #   device    장치 연결(Entra 조인) — Windows 로그인 자체가 학교 계정. Pro 이상만.
+    #   workplace 계정 추가            — 앱만 이어진다. Home 은 이것만 된다.
+    #
+    # 예전에는 셋을 합쳐 "연결돼 있습니다" 한 줄로 보여 줬는데, 그러면 계정만 추가된
+    # Home 컴퓨터가 장치까지 연결된 것처럼 읽힌다. 실제로 "기기 연결이 안 됐는데
+    # 됐다고 나온다" 는 말을 들었다. 둘은 학교가 이 컴퓨터를 관리하느냐 마느냐가 갈리는,
+    # 전혀 다른 상태다.
+    $kind = 'none'
+
     try {
         foreach ($line in @(dsregcmd /status 2>$null)) {
-            if ($line -match '^\s*(?:AzureAdJoined|DomainJoined|WorkplaceJoined)\s*:\s*YES') { $connected = $true }
+            if ($line -match '^\s*AzureAdJoined\s*:\s*YES')    { $connected = $true; $kind = 'device' }
+            if ($line -match '^\s*DomainJoined\s*:\s*YES')     { $connected = $true; if ($kind -eq 'none') { $kind = 'domain' } }
+            if ($line -match '^\s*WorkplaceJoined\s*:\s*YES')  { $connected = $true; if ($kind -eq 'none') { $kind = 'workplace' } }
 
             # 장치 연결이면 TenantId, 계정 추가면 WorkplaceTenantId 로 나온다.
             if ($line -match '^\s*(?:Workplace)?TenantId\s*:\s*([0-9a-fA-F-]{36})') {
@@ -305,6 +389,7 @@ function Get-TeavelAccountState {
 
     $d = New-Object System.Collections.Generic.List[string]
     $d.Add("connected=$connected")
+    $d.Add("kind=$kind")
     $d.Add("tenant=$tenant")
     foreach ($a in $accounts) { $d.Add("account=$a") }
 
@@ -636,84 +721,53 @@ function Get-TeavelComputerName {
 
 <#
 .SYNOPSIS
-    컴퓨터 이름을 바꾼다. 관리자 확인 창(UAC)이 한 번 뜬다.
+    컴퓨터 이름을 바꾸는 설정 화면을 연다. 아무것도 바꾸지 않는다.
 .DESCRIPTION
-    이름 바꾸기는 관리자 권한이 필요하다. Teavel 은 교사 계정으로 돌기 때문에,
-    승격된 프로세스를 하나 띄워 거기서 바꾼다 — 선생님은 [예] 를 한 번 누르면 된다.
+    <b>예전에는 Teavel 이 직접 바꿨다.</b> 승격된 프로세스를 띄워 `Rename-Computer` 를 부르고,
+    그 전에 이름 규칙을 우리가 검사했다 — 영문자·숫자·붙임표만, 15자 이내, 한글 금지.
 
-    바꾼 이름은 다시 시작해야 적용된다. 여기서 다시 시작시키지는 않는다.
-.PARAMETER NewName
-    새 이름. 영문자·숫자·붙임표(-)만 쓸 수 있고 15자 이내여야 한다.
-    한글은 쓸 수 없다 — 네트워크에서 컴퓨터를 찾지 못하는 문제가 생긴다.
+    그 규칙이 문제였다. <b>Windows 는 한글 이름을 받아 준다.</b> 그런데 Teavel 만 거부하니,
+    선생님이 보기에는 되는 일을 우리가 막는 것이었다. 우리가 Windows 보다 엄격할 까닭이 없다.
+
+    (한글 이름이 좋다는 뜻은 아니다. NetBIOS 는 15바이트 제한이고 한글은 글자당 2바이트라
+    금방 넘치며, DNS 레이블 규칙은 영문자·숫자·붙임표만 허용한다. 나중에 네트워크 프린터나
+    공유 폴더가 안 잡히는 식으로 나타난다. 그래서 <b>권하지는 않되 막지도 않는다</b> —
+    화면을 열어 드리고 판단은 선생님이 하신다.)
+
+    비밀번호가 필요한 일을 대신 해 주는 척하지 않고 정확한 화면을 열어 주는 것과 같은 원칙이다.
 #>
-function Set-TeavelComputerName {
-    param(
-        [Parameter(Mandatory)][string] $NewName
-    )
+function Open-TeavelComputerNameSetting {
+    param()
 
-    $name = $NewName.Trim()
+    # Windows 11 은 설정 > 시스템 > 정보 에 [이 PC의 이름 바꾸기] 가 있다.
+    Start-Process 'ms-settings:about'
 
-    # ── 이름 규칙 ── 여기서 막지 않으면 네트워크 이름 해석이 조용히 망가진다.
-    if ($name.Length -eq 0)  { throw '새 이름을 알려주셔야 합니다.' }
-    if ($name.Length -gt 15) { throw "컴퓨터 이름은 15자를 넘을 수 없습니다. ('$name' 은 $($name.Length)자)" }
-    if ($name -match '[가-힣]') {
-        throw "컴퓨터 이름에 한글은 쓸 수 없습니다. 영문으로 지어 주세요. (예: 2-3-kimminsu)"
-    }
-    if ($name -notmatch '^[A-Za-z0-9-]+$') {
-        throw "컴퓨터 이름에는 영문자·숫자·붙임표(-)만 쓸 수 있습니다. 빈칸이나 밑줄은 안 됩니다. (받은 값: $name)"
-    }
-    if ($name -match '^\d+$')      { throw '숫자만으로는 이름을 지을 수 없습니다.' }
-    if ($name -match '^-|-$')      { throw '이름의 처음이나 끝에 붙임표(-)를 둘 수 없습니다.' }
-
-    $current = [string]$env:COMPUTERNAME
-    if ($name -ieq $current) {
-        return New-TeavelResult -Message "이미 '$current' 입니다. 바꿀 것이 없습니다."
-    }
-
-    # ── 학교가 관리하는 PC 는 건드리지 않는다 ──
     $f = Get-TeavelSystemFacts
+    $current = [string]$env:COMPUTERNAME
+
+    $d = New-Object System.Collections.Generic.List[string]
+    $d.Add("지금 이름: $current")
+    $d.Add('')
+    $d.Add('[이 PC의 이름 바꾸기] 를 누르시고 새 이름을 넣으세요.')
+    $d.Add('다시 시작해야 적용됩니다.')
+    $d.Add('')
+    $d.Add('이름을 지으실 때 — 한글도 되지만 영문을 권합니다.')
+    $d.Add('  네트워크에서 컴퓨터를 찾을 때 쓰는 이름이라, 한글로 지으면 나중에')
+    $d.Add('  공유 폴더나 네트워크 프린터가 안 잡히는 일이 생길 수 있습니다.')
+    $d.Add('  예: 2-3-kimminsu · sci-lab-01 · gyomusil-1')
+
     if ($f.AzureAdJoined -or $f.DomainJoined) {
-        throw ('이 컴퓨터는 학교가 관리하는 상태(도메인·조직 연결)입니다. ' +
-               '이름을 바꾸면 학교 자원 접근이 끊길 수 있어 Teavel 이 바꾸지 않습니다. ' +
-               '전산 담당 선생님께 문의해 주세요.')
+        $d.Add('')
+        $d.Add('※ 이 컴퓨터는 학교가 관리하는 상태입니다(도메인·조직 연결).')
+        $d.Add('   이름을 바꾸면 학교 자원 접근이 끊길 수 있습니다 — 전산 담당 선생님께 먼저 물어보세요.')
     }
 
-    # ── 관리자 권한으로 한 번만 승격 ──
-    $quoted = $name -replace "'", "''"
-    try {
-        $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -WindowStyle Hidden `
-             -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
-                           "Rename-Computer -NewName '$quoted' -Force -ErrorAction Stop"
-    }
-    catch {
-        throw '관리자 확인 창에서 [아니오] 를 누르셨거나 권한을 얻지 못했습니다. 이름을 바꾸지 않았습니다.'
-    }
-
-    if ($null -eq $p -or $p.ExitCode -ne 0) {
-        throw "이름을 바꾸지 못했습니다. 학교 정책으로 막혀 있을 수 있습니다. (종료 코드 $($p.ExitCode))"
-    }
-
-    # ── 실제로 예약됐는지 확인한다 ── 승격된 프로세스가 조용히 실패했을 수 있다.
-    $pending = ''
-    try {
-        $pending = [string](Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName' `
-                            -Name ComputerName -EA SilentlyContinue).ComputerName
-    } catch { }
-
-    if ($pending -ine $name) {
-        throw "이름 바꾸기가 적용되지 않았습니다. 지금 예약된 이름은 '$pending' 입니다."
-    }
-
-    New-TeavelResult -Message "컴퓨터 이름을 '$name' 으로 바꿨습니다." -Details @(
-        "지금 이름: $current  →  다시 시작 후: $name",
-        '',
-        '컴퓨터를 다시 시작해야 적용됩니다. 지금 하시지 않아도 됩니다.',
-        '다시 시작하기 전까지는 예전 이름으로 보입니다.'
-    )
+    New-TeavelResult -Message '이름을 바꾸는 화면을 띄웠습니다.' -Details $d
 }
+
 
 Export-ModuleMember -Function `
     Get-TeavelSystemFacts, Get-TeavelWindowsInfo, Get-TeavelAccountGuide, Open-TeavelAccountSetting, `
-    Get-TeavelAccountState, `
+    Get-TeavelAccountState, Get-TeavelAccountErrors, `
     Get-TeavelUpdateStatus, Install-TeavelUpdates, Open-TeavelUpdateSetting, `
-    Get-TeavelComputerName, Set-TeavelComputerName
+    Get-TeavelComputerName, Open-TeavelComputerNameSetting

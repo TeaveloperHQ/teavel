@@ -49,16 +49,13 @@ public sealed class ComputerNameTask : ISetupTask
         var check = await CheckAsync(ct).ConfigureAwait(false);
         if (check.State != CheckState.NeedsFix) return FixResult.AlreadyOk(check.Summary);
 
-        // 새 이름은 학교마다 규칙이 달라 우리가 지어 줄 수 없다. 교사에게 물어야 한다.
-        return FixResult.Manual(
-            "새 이름을 정해 주셔야 바꿀 수 있습니다.",
-            "이렇게 말씀해 주세요:",
-            "  \"컴퓨터 이름 바꿔줘\"",
-            "",
-            "이름 규칙 — 영문자·숫자·붙임표(-) 만, 15자 이내입니다.",
-            "한글은 쓸 수 없습니다(네트워크에서 컴퓨터를 못 찾는 문제가 생깁니다).",
-            "예: 2-3-kimminsu · sci-lab-01 · teacher-kim",
-            "",
-            "바꿀 때 관리자 확인 창이 한 번 뜹니다. [예] 를 누르시면 됩니다.");
+        // 새 이름은 학교마다 규칙이 달라 우리가 지어 줄 수 없다. 화면을 열어 드리고 맡긴다.
+        var res = await _runner
+            .InvokeAsync("Teavel.Setup", "Open-TeavelComputerNameSetting", NoArgs, 60, "이름 바꾸기 화면", ct)
+            .ConfigureAwait(false);
+
+        if (!res.Ok) return FixResult.Failed(res.Message, res.Details.ToArray());
+
+        return FixResult.Manual(res.Message, res.Details.ToArray());
     }
 }
