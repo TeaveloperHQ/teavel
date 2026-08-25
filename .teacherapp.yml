@@ -1,4 +1,4 @@
-# teaveloper 포털 빌드 선언.
+﻿# teaveloper 포털 빌드 선언.
 #
 # 포털은 이 저장소를 받아 도커 안에서 dotnet publish 를 돌리고,
 # 나온 것 중 .exe 하나만 집어 배포한다.
@@ -30,6 +30,11 @@ entry: src/Teavel.Cli/Teavel.Cli.csproj
 versionSource: tag
 
 # 콘솔 앱이다. 선생님이 PowerShell 창에서 'teavel' 을 치고 대화한다.
+#
+# M365 관리에서 창(WinForms)이 몇 군데 뜨지만 여기는 false 로 둔다.
+# 이 값은 '콘솔 없이 띄우는 앱인가' 를 뜻하고, Teavel 은 아니다 —
+# 콘솔이 본체이고 창은 고를 것이 많은 자리에서만 잠깐 열린다.
+# true 로 바꾸면 콘솔이 사라져 본체가 통째로 못 쓰게 된다.
 gui: false
 
 notes: 선생님 컴퓨터를 대신 세팅하고 학교 M365 를 구성해 주는 도구입니다. PowerShell 창에서 씁니다.

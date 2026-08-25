@@ -1,4 +1,4 @@
-# 가짜 테넌트
+﻿# 가짜 테넌트
 
 테넌트도 로그인도 없이 `teavel m365` 흐름 전체를 리눅스에서 돌려 보는 장치.
 
@@ -29,6 +29,45 @@ printf '3\n3\n3\ny\n' | teavel m365
 두 번째로 돌리면 아무것도 만들지 않아야 한다 — **여러 번 돌려도 안전**하다는 뜻이다.
 
 `TEAVEL_FAKE_STORE` 를 주지 않으면 프로세스마다 처음 상태로 돌아간다.
+
+## Windows PowerShell 5.1 에서
+
+교사 PC 에 있는 것이 이것이므로 여기서도 돌아야 한다. PowerShell 창에서:
+
+```powershell
+$env:PSModulePath = "$PWD\tools\fake-tenant;$env:PSModulePath"
+$env:TEAVEL_FAKE_STORE = "$env:TEMP\teavel-fake-store.json"
+Remove-Item "$env:TEAVEL_FAKE_STORE*" -ErrorAction SilentlyContinue
+
+.\teavel.exe m365 --yes      # 자동 모드 — 정리는 건너뛰고 만들기만 한다
+.\teavel.exe m365 --yes      # 두 번째. 아무것도 만들지 않아야 한다
+```
+
+`--yes` 로 돌면 **창이 열리지 않는다.** 사람이 없는 자리이기 때문이다.
+답을 파이프로 흘려 넣을 때도 마찬가지다 — 그때 창이 뜨면 아무도 없는 화면 앞에서 멈춘다.
+
+### 5.1 이라서 걸린 것 둘
+
+둘 다 리눅스·PowerShell 7 에서는 안 나오고 5.1 에서만 나온다. 그래서 오래 안 보였다.
+
+**하나 — `.psm1` 에 BOM 이 없으면 한글이 깨진다.**
+5.1 은 BOM 없는 파일을 시스템 코드페이지(한국어 Windows 면 CP949)로 읽는다.
+모듈이 통째로 구문 오류가 되어 흐름이 시작도 못 한다. `scripts/` 의 진짜 모듈들은
+처음부터 BOM 이 있었고, 가짜만 리눅스에서 만들어져 없었다.
+
+**둘 — `ConvertFrom-Json` 을 파이프에 바로 물리면 안 된다.**
+5.1 은 배열을 낱개가 아니라 **한 덩어리로** 내보낸다(7 부터 바뀌었다).
+그래서 `ConvertFrom-Json | ForEach-Object` 가 25번이 아니라 한 번 돌고,
+값이 전부 배열인 해시테이블 하나가 만들어진다.
+
+```powershell
+$rows = Get-Content $path -Raw | ConvertFrom-Json     # 변수에 그냥 받는다
+$rows | ForEach-Object { ... }                        # 이제 낱개로 풀린다
+```
+
+`@(...)` 로 감싸는 것으로는 **안 된다** — 그 한 덩어리를 원소 하나로 담을 뿐이다.
+증상이 엉뚱한 곳에서 터진다. 저장한 상태를 다시 읽는 두 번째 실행에서
+`"Object[]" 를 "DateTime" 으로 변환할 수 없습니다` 가 나왔다.
 
 ## 걸리는 곳 — 진짜 EXO 가 깔려 있으면 진다
 

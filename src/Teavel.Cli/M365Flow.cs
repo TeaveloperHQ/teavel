@@ -1,4 +1,5 @@
-﻿using Teavel.M365;
+﻿using Teavel.Cli.Gui;
+using Teavel.M365;
 using Teavel.Roster;
 using Teavel.Tools;
 
@@ -557,10 +558,10 @@ public sealed class M365Flow
         if (candidates.Count == 0) return inventory;
 
         Ui.Title("⑤ 정리");
-        Ui.Dim($"      정리해 볼 만한 것이 {candidates.Count}개 있습니다. 하나씩 여쭙겠습니다.");
+        Ui.Dim($"      정리해 볼 만한 것이 {candidates.Count}개 있습니다.");
         Console.WriteLine();
         Ui.Dim("      지우면 그 안의 파일과 대화가 함께 사라집니다.");
-        Ui.Dim("      이름만 바꾸면 내용은 그대로 남습니다. 잘 모르겠으면 [3] 그냥 두기를 고르세요.");
+        Ui.Dim("      이름만 바꾸면 내용은 그대로 남습니다. 잘 모르겠으면 그냥 두기를 고르세요.");
 
         // 자동 응답으로 돌 때는 아무것도 지우지 않는다. 사람이 없는 자리에서
         // 파일이 딸린 그룹을 지우는 일이 벌어져서는 안 된다.
@@ -570,6 +571,36 @@ public sealed class M365Flow
             Ui.Info("자동 모드에서는 정리를 건너뜁니다. 지우기는 사람이 봐야 합니다.");
             return inventory;
         }
+
+        // 정리는 견주어 보는 일이다 — 이건 시험용 잔재고 저건 진짜 수업 그룹이고.
+        // 콘솔에서는 하나씩 묻고 넘어가 앞의 판단을 고칠 수 없었다.
+        if (Desk.Available)
+        {
+            Console.WriteLine();
+            if (Ui.Confirm($"      {candidates.Count}개를 창에서 한눈에 보고 정하시겠습니까?"))
+            {
+                Desk.Handoff();
+
+                var rows = candidates.Select(t =>
+                {
+                    var y = YearOf(t.Group);
+                    return new TidyRow(t, y.Length > 0 ? $"{y} {t.Group.DisplayName}" : "");
+                }).ToList();
+
+                var decided = TidyWindow.Open(rows);
+                if (decided is not null)
+                {
+                    await ApplyTidyAsync(host, inventory, decided, ct).ConfigureAwait(false);
+                    return inventory;
+                }
+
+                // 창을 닫은 것은 '그만두겠다' 가 아니라 '창은 됐다' 일 수 있다. 콘솔로 이어 간다.
+                Ui.Info("창을 닫으셨습니다.");
+            }
+        }
+
+        Console.WriteLine();
+        Ui.Dim("      하나씩 여쭙겠습니다.");
 
         foreach (var t in candidates)
         {
@@ -615,22 +646,7 @@ public sealed class M365Flow
                     continue;
                 }
 
-                var r = await host.CallAsync("Rename-TeavelM365Group", new Dictionary<string, object?>
-                {
-                    ["Identity"] = g.MailNickname,
-                    ["NewDisplayName"] = newName,
-                }, ct: ct).ConfigureAwait(false);
-
-                if (r.Ok)
-                {
-                    Ui.Ok(r.Message);
-                    Ui.Details(r.Details);
-                    // 대조는 이름으로 하므로, 바꾼 이름을 재고에 곧바로 반영해야
-                    // 아래에서 같은 이름을 또 만들지 않는다.
-                    var i = inventory.IndexOf(g);
-                    if (i >= 0) inventory[i] = g with { DisplayName = newName };
-                }
-                else { Ui.Error(r.Message); Ui.Details(r.Details); }
+                await RenameOneAsync(host, inventory, g, newName, ct).ConfigureAwait(false);
             }
             else if (pick == "2")
             {
@@ -651,46 +667,11 @@ public sealed class M365Flow
                     continue;
                 }
 
-                var r = await host.CallAsync("Remove-TeavelM365Group", new Dictionary<string, object?>
-                {
-                    ["Identity"] = g.MailNickname,
-                    ["Confirmed"] = true,
-                }, ct: ct).ConfigureAwait(false);
-
-                if (r.Ok) { Ui.Ok(r.Message); inventory.Remove(g); }
-                else { Ui.Error(r.Message); Ui.Details(r.Details); }
+                await DeleteOneAsync(host, inventory, g, ct).ConfigureAwait(false);
             }
             else if (pick == "4" && archived.Length > 0)
             {
-                if (!await EnsureTeamsAsync(host, ct).ConfigureAwait(false)) continue;
-
-                var r = await host.CallAsync("Rename-TeavelM365Group", new Dictionary<string, object?>
-                {
-                    ["Identity"] = g.MailNickname,
-                    ["NewDisplayName"] = archived,
-                }, ct: ct).ConfigureAwait(false);
-
-                if (!r.Ok) { Ui.Error(r.Message); Ui.Details(r.Details); continue; }
-                Ui.Ok(r.Message);
-
-                var i2 = inventory.IndexOf(g);
-                if (i2 >= 0) inventory[i2] = g with { DisplayName = archived };
-
-                if (g.GroupId.Length == 0)
-                {
-                    Ui.Warn("이름은 바꿨지만 학생을 내보내지 못했습니다(팀 id 를 모릅니다).");
-                    continue;
-                }
-
-                var out2 = await host.CallAsync("Remove-TeavelTeamStudent", new Dictionary<string, object?>
-                {
-                    ["GroupId"] = g.GroupId,
-                }, timeout: TimeSpan.FromMinutes(10), ct: ct).ConfigureAwait(false);
-
-                if (out2.Ok) { Ui.Ok(out2.Message); Ui.Details(out2.Details); }
-                else { Ui.Error(out2.Message); Ui.Details(out2.Details); }
-
-                Ui.Dim("      팀과 그 안의 파일·대화는 그대로 있습니다. 담당 선생님은 계속 볼 수 있습니다.");
+                await ArchiveOneAsync(host, inventory, g, archived, ct).ConfigureAwait(false);
             }
             else
             {
@@ -699,6 +680,127 @@ public sealed class M365Flow
         }
 
         return inventory;
+    }
+
+    /// <summary>
+    /// 창에서 정한 것을 그대로 실행한다.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>지우기를 맨 뒤로 미룬다.</b> 중간에 끊기는 일은 늘 있고, 그때 되돌릴 수 있는 것부터
+    /// 되어 있어야 한다. 이름 바꾸기와 보관은 다시 돌리면 되지만 지우기는 그렇지 않다.
+    /// </para>
+    /// <para>
+    /// 실행은 콘솔에 그대로 찍는다. 창은 이미 닫혔고, 무엇을 했는지는 남아 있어야 한다 —
+    /// 관리자가 나중에 "내가 뭘 지웠더라" 하고 되짚을 곳이 여기뿐이다.
+    /// </para>
+    /// </remarks>
+    private async Task ApplyTidyAsync(
+        M365Host host, List<ExistingGroup> inventory,
+        IReadOnlyList<TidyDecision> decided, CancellationToken ct)
+    {
+        if (decided.Count == 0)
+        {
+            Console.WriteLine();
+            Ui.Info("정리할 것을 고르지 않으셨습니다. 그대로 둡니다.");
+            return;
+        }
+
+        Console.WriteLine();
+        Ui.Info($"창에서 정하신 {decided.Count}개를 손봅니다.");
+
+        foreach (var d in decided.OrderBy(x => x.Action == TidyAction.Delete ? 1 : 0))
+        {
+            Console.WriteLine();
+            Ui.Plain($"      {d.Group.DisplayName}");
+
+            switch (d.Action)
+            {
+                case TidyAction.Rename:
+                    await RenameOneAsync(host, inventory, d.Group, d.NewName, ct).ConfigureAwait(false);
+                    break;
+
+                case TidyAction.Archive:
+                    await ArchiveOneAsync(host, inventory, d.Group, d.NewName, ct).ConfigureAwait(false);
+                    break;
+
+                case TidyAction.Delete:
+                    await DeleteOneAsync(host, inventory, d.Group, ct).ConfigureAwait(false);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>이름만 바꾼다. 안의 파일·대화는 그대로 남는다.</summary>
+    private static async Task RenameOneAsync(
+        M365Host host, List<ExistingGroup> inventory,
+        ExistingGroup g, string newName, CancellationToken ct)
+    {
+        var r = await host.CallAsync("Rename-TeavelM365Group", new Dictionary<string, object?>
+        {
+            ["Identity"] = g.MailNickname,
+            ["NewDisplayName"] = newName,
+        }, ct: ct).ConfigureAwait(false);
+
+        if (!r.Ok) { Ui.Error(r.Message); Ui.Details(r.Details); return; }
+
+        Ui.Ok(r.Message);
+        Ui.Details(r.Details);
+
+        // 대조는 이름으로 하므로, 바꾼 이름을 재고에 곧바로 반영해야
+        // 아래에서 같은 이름을 또 만들지 않는다.
+        var i = inventory.IndexOf(g);
+        if (i >= 0) inventory[i] = g with { DisplayName = newName };
+    }
+
+    /// <summary>지운다. 되돌릴 수 없다 — 부르기 전에 사람이 한 번 더 확인한 뒤라야 한다.</summary>
+    private static async Task DeleteOneAsync(
+        M365Host host, List<ExistingGroup> inventory, ExistingGroup g, CancellationToken ct)
+    {
+        var r = await host.CallAsync("Remove-TeavelM365Group", new Dictionary<string, object?>
+        {
+            ["Identity"] = g.MailNickname,
+            ["Confirmed"] = true,
+        }, ct: ct).ConfigureAwait(false);
+
+        if (r.Ok) { Ui.Ok(r.Message); inventory.Remove(g); }
+        else { Ui.Error(r.Message); Ui.Details(r.Details); }
+    }
+
+    /// <summary>이름 앞에 연도를 붙이고 학생만 내보낸다. 팀과 자료는 그대로 둔다.</summary>
+    private async Task ArchiveOneAsync(
+        M365Host host, List<ExistingGroup> inventory,
+        ExistingGroup g, string archived, CancellationToken ct)
+    {
+        if (!await EnsureTeamsAsync(host, ct).ConfigureAwait(false)) return;
+
+        var r = await host.CallAsync("Rename-TeavelM365Group", new Dictionary<string, object?>
+        {
+            ["Identity"] = g.MailNickname,
+            ["NewDisplayName"] = archived,
+        }, ct: ct).ConfigureAwait(false);
+
+        if (!r.Ok) { Ui.Error(r.Message); Ui.Details(r.Details); return; }
+        Ui.Ok(r.Message);
+
+        var i = inventory.IndexOf(g);
+        if (i >= 0) inventory[i] = g with { DisplayName = archived };
+
+        if (g.GroupId.Length == 0)
+        {
+            Ui.Warn("이름은 바꿨지만 학생을 내보내지 못했습니다(팀 id 를 모릅니다).");
+            return;
+        }
+
+        var outed = await host.CallAsync("Remove-TeavelTeamStudent", new Dictionary<string, object?>
+        {
+            ["GroupId"] = g.GroupId,
+        }, timeout: TimeSpan.FromMinutes(10), ct: ct).ConfigureAwait(false);
+
+        if (outed.Ok) { Ui.Ok(outed.Message); Ui.Details(outed.Details); }
+        else { Ui.Error(outed.Message); Ui.Details(outed.Details); }
+
+        Ui.Dim("      팀과 그 안의 파일·대화는 그대로 있습니다. 담당 선생님은 계속 볼 수 있습니다.");
     }
 
     /// <summary>만든 날의 연도. 모르면 빈 문자열.</summary>
@@ -1021,10 +1123,41 @@ public sealed class M365Flow
             return;
         }
 
-        Console.WriteLine();
-        if (!_assumeYes && !Ui.Confirm($"      {total}명을 넣을까요?"))
+        // 여기까지는 '전부 넣거나 전부 안 넣거나' 둘뿐이었다. 한 반만 빼거나 전학 간 아이
+        // 하나를 빼려면 명단 파일을 고쳐 다시 돌리는 수밖에 없었는데, 그건 관리자가 할 일이 아니다.
+        List<MemberPick>? picks = null;
+
+        if (Desk.Available && !_assumeYes)
         {
-            Ui.Info("넣지 않았습니다.");
+            Console.WriteLine();
+            if (Ui.Confirm("      창에서 반과 사람을 보고 고르시겠습니까?"))
+            {
+                Desk.Handoff();
+                var chosen = MemberWindow.Open(assignments);
+                if (chosen is not null) picks = chosen.ToList();
+                else Ui.Info("창을 닫으셨습니다.");
+            }
+        }
+
+        if (picks is null)
+        {
+            Console.WriteLine();
+            if (!_assumeYes && !Ui.Confirm($"      {total}명을 넣을까요?"))
+            {
+                Ui.Info("넣지 않았습니다.");
+                await AssignOwnersAsync(host, assignments, have, ct).ConfigureAwait(false);
+                return;
+            }
+
+            picks = assignments.Where(x => x.CanApply)
+                               .Select(a => new MemberPick(a.ClassKey, a.Team!, a.ToAdd))
+                               .ToList();
+        }
+
+        if (picks.Count == 0)
+        {
+            Console.WriteLine();
+            Ui.Info("넣기로 고르신 사람이 없습니다.");
             await AssignOwnersAsync(host, assignments, have, ct).ConfigureAwait(false);
             return;
         }
@@ -1032,23 +1165,23 @@ public sealed class M365Flow
         var added = 0;
         var failed = 0;
 
-        foreach (var a in assignments.Where(x => x.CanApply))
+        foreach (var p in picks)
         {
             var r = await host.CallAsync("Add-TeavelTeamMember", new Dictionary<string, object?>
             {
-                ["GroupId"] = a.Team!.GroupId,
-                ["Users"] = a.ToAdd.Select(x => x.Upn).ToList(),
+                ["GroupId"] = p.Team.GroupId,
+                ["Users"] = p.People.Select(x => x.Upn).ToList(),
                 ["Role"] = "Member",
             }, timeout: TimeSpan.FromMinutes(10), ct: ct).ConfigureAwait(false);
 
             if (r.Ok)
             {
-                Ui.Ok($"{a.ClassKey} — {r.Message}");
-                added += a.ToAdd.Count - r.Details.Count(d => d.StartsWith("실패:", StringComparison.Ordinal));
+                Ui.Ok($"{p.ClassKey} — {r.Message}");
+                added += p.People.Count - r.Details.Count(d => d.StartsWith("실패:", StringComparison.Ordinal));
             }
             else
             {
-                Ui.Error($"{a.ClassKey} — {r.Message}");
+                Ui.Error($"{p.ClassKey} — {r.Message}");
                 failed++;
             }
 
@@ -1128,6 +1261,52 @@ public sealed class M365Flow
         var faculty = UserDirectory.GuessFaculty(UserDirectory.Cluster(people))?.Bundle;
         var done = 0;
 
+        // 반 스무 개면 아래 물음이 스무 번이다. 앞에서 적은 것을 고칠 수도, 몇 개나 정했는지
+        // 볼 수도 없었다. 창에서는 고를 것이 이미 목록에 있고 한 화면에 다 보인다.
+        if (Desk.Available)
+        {
+            Console.WriteLine();
+            if (Ui.Confirm("      창에서 한눈에 보고 정하시겠습니까?"))
+            {
+                Desk.Handoff();
+
+                // 이미 담임이 있는 반도 함께 올린다. 남은 것만 보이면 스무 반 중 몇 반이
+                // 이미 됐는지가 안 보이고, 관리자는 남은 여덟 개가 전부인 줄 안다.
+                var rows = teams.Select(a => new OwnerRow(
+                    a.ClassKey, a.Team!.DisplayName, a.Team!.GroupId,
+                    OwnerNameOf(a.Team!.GroupId, have, people))).ToList();
+
+                var picked = OwnerWindow.Open(rows, TeacherFinder.Faculty(people, faculty));
+
+                if (picked is not null)
+                {
+                    if (picked.Count == 0) { Console.WriteLine(); Ui.Info("담임을 정하지 않으셨습니다. 나중에 하셔도 됩니다."); return; }
+
+                    Console.WriteLine();
+                    foreach (var p in picked)
+                    {
+                        var res = await host.CallAsync("Add-TeavelTeamMember", new Dictionary<string, object?>
+                        {
+                            ["GroupId"] = p.GroupId,
+                            ["Users"] = new[] { p.Teacher.Upn },
+                            ["Role"] = "Owner",
+                        }, timeout: TimeSpan.FromMinutes(2), ct: ct).ConfigureAwait(false);
+
+                        if (res.Ok) { Ui.Ok($"{p.ClassKey} 담임 — {p.Teacher.DisplayName} ({p.Teacher.Upn})"); done++; }
+                        else { Ui.Error($"{p.ClassKey} — {res.Message}"); Ui.Details(res.Details); }
+                    }
+
+                    Console.WriteLine();
+                    Ui.Info($"담임 {done}명을 지정했습니다.");
+                    if (done < need.Count)
+                        Ui.Dim($"      {need.Count - done}개 반은 나중에 다시 실행해서 정하시면 됩니다.");
+                    return;
+                }
+
+                Ui.Info("창을 닫으셨습니다.");
+            }
+        }
+
         foreach (var a in need)
         {
             Console.WriteLine();
@@ -1175,6 +1354,34 @@ public sealed class M365Flow
         Ui.Info($"담임 {done}명을 지정했습니다.");
         if (done < need.Count)
             Ui.Dim($"      {need.Count - done}개 반은 나중에 다시 실행해서 정하시면 됩니다.");
+    }
+
+    /// <summary>
+    /// 그 팀의 소유자 이름. 없으면 빈 문자열.
+    /// </summary>
+    /// <remarks>
+    /// 테넌트가 주는 것은 아이디뿐이라 사람 목록에서 이름을 찾아 붙인다. 못 찾으면
+    /// <b>아이디를 그대로 보여 준다</b> — '있음' 이라고만 하면 누구인지 모르고,
+    /// 관리자가 알고 싶은 것은 바로 그 누구인지다.
+    /// </remarks>
+    private static string OwnerNameOf(
+        string groupId,
+        IReadOnlyDictionary<string, IReadOnlyList<TeamMember>> have,
+        IReadOnlyList<TenantUser> people)
+    {
+        if (!have.TryGetValue(groupId, out var members)) return "";
+
+        var owners = members
+            .Where(m => m.Role.Equals("Owner", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (owners.Count == 0) return "";
+
+        var first = owners[0].Upn;
+        var who = people.FirstOrDefault(p => p.Upn.Equals(first, StringComparison.OrdinalIgnoreCase));
+        var name = who?.DisplayName is { Length: > 0 } d ? d : first;
+
+        return owners.Count > 1 ? $"{name} 외 {owners.Count - 1}명" : name;
     }
 
     /// <summary>학교 사람 목록을 읽는다. 실패하면 빈 목록.</summary>

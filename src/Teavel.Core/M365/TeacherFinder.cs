@@ -131,6 +131,50 @@ public static class TeacherFinder
         => matches.Count == 1
         || (matches.Count > 1 && matches[0].Score >= 100 && matches[1].Score < 100);
 
+    /// <summary>
+    /// 선생님으로 볼 만한 사람들을 이름순으로 준다.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="Find"/> 는 관리자가 <b>이름을 적었을 때</b> 찾아 주는 것이고, 이쪽은
+    /// <b>목록을 놓고 고를 때</b> 쓴다. 창에서 반 스무 개의 담임을 정할 때가 그렇다 —
+    /// 고를 것이 미리 있어야 반마다 검색을 시키지 않는다.
+    /// </para>
+    /// <para>
+    /// 거르는 기준은 <see cref="Find"/> 와 같다. 학교 밖 사람, 라이선스 없는 계정,
+    /// 학생처럼 생긴 표시 이름을 뺀다. <b>학생을 팀 소유자로 만들면 그 아이가 반 전체를
+    /// 지울 수 있다.</b>
+    /// </para>
+    /// <para>
+    /// 교사 라이선스 꾸러미를 알면 그것만 남긴다 — 실제 테넌트에는 공용 계정과 행정 계정이
+    /// 섞여 있어 목록이 길어진다. 다만 <b>그 꾸러미에 몇 사람 없으면 짐작이 틀린 것</b>으로
+    /// 보고 거르지 않는다. 잘못 거르면 진짜 담임이 목록에서 사라지고, 그건 길어지는 것보다 나쁘다.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<TenantUser> Faculty(
+        IReadOnlyList<TenantUser> people, string? facultyBundle = null)
+    {
+        var candidates = people
+            .Where(p => !UserDirectory.IsOutsider(p))
+            .Where(p => !p.AccountType.Equals("IneligibleUser", StringComparison.OrdinalIgnoreCase))
+            .Where(p => !StudentLike.IsMatch(p.DisplayName.Trim()))
+            .ToList();
+
+        if (facultyBundle is { Length: > 0 })
+        {
+            var licensed = candidates
+                .Where(p => string.Equals(p.LicenseBundle, facultyBundle, StringComparison.Ordinal))
+                .ToList();
+
+            if (licensed.Count >= UserDirectory.SmallCluster) candidates = licensed;
+        }
+
+        return candidates
+            .OrderBy(p => p.DisplayName, StringComparer.CurrentCulture)
+            .ThenBy(p => p.Upn, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     private static string LocalPart(string upn)
     {
         var at = upn.IndexOf('@');

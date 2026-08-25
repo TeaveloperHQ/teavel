@@ -1,4 +1,4 @@
-<#
+﻿<#
     가짜 Exchange Online — 시험용.
 
     진짜와 같은 이름의 함수를 내어, PSModulePath 에 얹으면 Teavel 이 진짜 대신 이것을 부른다.
@@ -53,7 +53,17 @@ $script:Store = @(
 )
 
 if ($env:TEAVEL_FAKE_STORE -and (Test-Path $env:TEAVEL_FAKE_STORE)) {
-    $script:Store = @(Get-Content $env:TEAVEL_FAKE_STORE -Raw | ConvertFrom-Json | ForEach-Object {
+    # ConvertFrom-Json 을 그대로 파이프에 물리면 안 된다.
+    #
+    # Windows PowerShell 5.1 은 배열을 <한 덩어리로> 내보낸다(7 부터 낱개로 바뀌었다).
+    # 그래서 ForEach-Object 가 25번이 아니라 한 번 돌고, 값이 전부 배열인 해시테이블
+    # 하나가 만들어진다. 증상은 엉뚱한 곳에서 터진다 — [datetime]$Row.Created 가
+    # "Object[] 를 DateTime 으로 못 바꾼다" 고 한다.
+    #
+    # 변수에 그냥 받으면 다음 파이프가 낱개로 푼다.
+    # @() 로 감싸는 것으로는 안 된다 — 그 한 덩어리를 원소 하나로 담을 뿐이다.
+    $rows = Get-Content $env:TEAVEL_FAKE_STORE -Raw | ConvertFrom-Json
+    $script:Store = @($rows | ForEach-Object {
         @{ DisplayName = $_.DisplayName; Alias = $_.Alias; Team = $_.Team
            Members = $_.Members; Created = $_.Created; Access = $_.Access }
     })
@@ -61,7 +71,7 @@ if ($env:TEAVEL_FAKE_STORE -and (Test-Path $env:TEAVEL_FAKE_STORE)) {
 
 function Save-FakeStore {
     if ($env:TEAVEL_FAKE_STORE) {
-        $script:Store | ConvertTo-Json -Depth 5 | Set-Content -Path $env:TEAVEL_FAKE_STORE
+        $script:Store | ConvertTo-Json -Depth 5 | Set-Content -Path $env:TEAVEL_FAKE_STORE -Encoding utf8
     }
 }
 

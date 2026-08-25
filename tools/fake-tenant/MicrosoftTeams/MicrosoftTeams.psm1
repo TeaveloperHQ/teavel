@@ -1,4 +1,4 @@
-<#
+﻿<#
     가짜 MicrosoftTeams — 시험용. 짝은 ../ExchangeOnlineManagement 에 있다.
 
     진짜 New-Team 은 팀과 M365 그룹을 함께 만든다. 그래서 여기서도
@@ -42,7 +42,7 @@ if ($script:ChannelStore -and (Test-Path $script:ChannelStore)) {
 
 function Save-FakeChannels {
     if ($script:ChannelStore) {
-        $script:Channels | ConvertTo-Json -Depth 5 | Set-Content -Path $script:ChannelStore
+        $script:Channels | ConvertTo-Json -Depth 5 | Set-Content -Path $script:ChannelStore -Encoding utf8
     }
 }
 
@@ -131,7 +131,7 @@ if ($script:MemberStore -and (Test-Path $script:MemberStore)) {
     foreach ($p in $loaded.PSObject.Properties) { $script:Members[$p.Name] = @($p.Value) }
 }
 function Save-FakeMembers {
-    if ($script:MemberStore) { $script:Members | ConvertTo-Json -Depth 5 | Set-Content -Path $script:MemberStore }
+    if ($script:MemberStore) { $script:Members | ConvertTo-Json -Depth 5 | Set-Content -Path $script:MemberStore -Encoding utf8 }
 }
 
 function Get-TeamUser {
