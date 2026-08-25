@@ -249,10 +249,10 @@ public static class ToolCatalog
         // 자가점검은 이것들을 건너뛴다(대조할 .psm1 이 없다).
         new ToolSpec(
             Id: "school.compose",
-            Title: "학교 그룹·Teams 구성하기",
+            Title: "학교 그룹·Teams 관리 화면 열기",
             Category: ToolCategory.School,
-            Description: "학교에 지금 있는 그룹과 팀을 살펴보고, 정리하고, 모자란 반 팀을 만들고, "
-                       + "명단으로 학생을 반에 넣습니다. 전역 관리자만 할 수 있습니다.",
+            Description: "브라우저에 관리 화면을 띄웁니다. 거기서 지금 있는 그룹·팀을 보고, 정리하고, "
+                       + "모자란 반 팀을 만들고, 명단으로 학생을 반에 넣습니다. 전역 관리자만 할 수 있습니다.",
             Examples: new[]
             {
                 "반 팀 만들어줘",
@@ -273,8 +273,8 @@ public static class ToolCatalog
             Id: "school.archive",
             Title: "지난 학년도 팀 보관하기",
             Category: ToolCategory.School,
-            Description: "작년에 쓰던 팀을 이름 앞에 연도를 붙여 보관하고 학생들을 내보냅니다. "
-                       + "팀과 그 안의 파일·대화는 그대로 남아, 나중에 찾아볼 수 있습니다.",
+            Description: "관리 화면의 [그룹 · 팀] 을 엽니다. 작년에 쓰던 팀을 이름 앞에 연도를 붙여 "
+                       + "보관하고 학생들을 내보냅니다. 팀과 그 안의 파일·대화는 그대로 남습니다.",
             Examples: new[]
             {
                 "작년 팀 백업해줘",

@@ -281,19 +281,18 @@ public sealed class TeavelSession : IAsyncDisposable
     /// 명령 하나마다 브라우저 로그인이 다시 뜨기 때문이다 —
     /// 자세한 사정은 <see cref="M365.M365Host"/> 에 적어 두었다.
     /// </remarks>
-    public Task<int> RunM365Async(CancellationToken ct)
-        => new M365Flow(_tools, AssumeYes).RunAsync(ct);
-
-    /// <summary>
-    /// 브라우저에 관리 화면을 띄운다.
-    /// </summary>
     /// <remarks>
-    /// <see cref="RunM365Async"/> 는 <b>처음 한 번</b>을 위한 흐름이라 아홉 단계를 순서대로 지난다.
-    /// 학기 중에 전학생 한 명을 넣거나 담임 한 반을 고칠 때는 그 순서가 짐이 된다.
-    /// 이쪽은 단계가 없고, 할 일을 골라 그것만 한다.
+    /// <b>화면이 본길이다.</b> 학교 M365 를 손보는 분은 대개 그 역할을 떠맡은 선생님이고,
+    /// 목록을 놓고 눌러 고르는 편이 아홉 단계를 순서대로 지나는 것보다 쉽다.
+    /// 무엇보다 <b>화면은 누르기 전까지 아무것도 하지 않는다</b> — 잘못 들어와도 보고 나가면 된다.
+    ///
+    /// 콘솔 흐름은 화면을 못 여는 자리에만 쓴다(<see cref="Web.AdminFlow.Usable"/>) —
+    /// 자동 모드 · 답을 파이프로 흘려 넣는 검증 · 원격 접속.
     /// </remarks>
-    public Task<int> RunAdminAsync(CancellationToken ct)
-        => new Web.AdminFlow(_tools).RunAsync(ct);
+    public Task<int> RunM365Async(CancellationToken ct)
+        => Web.AdminFlow.Usable(AssumeYes)
+            ? new Web.AdminFlow(_tools).RunAsync(ct)
+            : new M365Flow(_tools, AssumeYes).RunAsync(ct);
 
     /// <summary>
     /// 형태소 분석기를 갖춘다. 이미 있으면 아무것도 하지 않는다.
@@ -571,6 +570,12 @@ public sealed class TeavelSession : IAsyncDisposable
     {
         switch (tool.Function)
         {
+            // 말로 들어오는 길은 관리 화면으로 보낸다.
+            //
+            // 예전에는 여기서 곧바로 콘솔 흐름을 열었다. '반 만들기' 한마디에 관리자 로그인부터
+            // 재고·명단·정리를 지나 '17개를 만듭니다' 까지 흘러갔고, 그 사이 어디에도
+            // 되돌아갈 자리가 없었다. 확인을 하나 덧대는 대신 화면으로 보낸다 —
+            // 화면은 누르기 전까지 아무것도 하지 않으므로 잘못 들어와도 보고 나가면 된다.
             case "m365":
                 await RunM365Async(ct).ConfigureAwait(false);
                 return;
@@ -578,11 +583,8 @@ public sealed class TeavelSession : IAsyncDisposable
             case "m365.archive":
                 Console.WriteLine();
                 Ui.Info("지난 학년도 팀을 정리하시려는 것 같습니다.");
-                Ui.Dim("      ⑤ 정리 에서 하나씩 고르실 수 있습니다.");
-                Ui.Dim("      '지난 학년도로 보관' 을 고르면 이름 앞에 연도를 붙이고 학생만 내보냅니다.");
-                Ui.Dim("      팀과 파일·대화는 그대로 남습니다.");
-                Console.WriteLine();
-                if (!AssumeYes && !Ui.Confirm("      들어갈까요?")) { Ui.Info("취소했습니다."); return; }
+                Ui.Dim("      화면의 [그룹 · 팀] 에서 '보관' 을 고르시면 됩니다.");
+                Ui.Dim("      이름 앞에 연도를 붙이고 학생만 내보냅니다 — 팀과 파일·대화는 그대로 남습니다.");
                 await RunM365Async(ct).ConfigureAwait(false);
                 return;
 
@@ -654,11 +656,8 @@ public sealed class TeavelSession : IAsyncDisposable
         {
             Console.WriteLine();
             Ui.Info("지난 학년도 팀을 정리하시려는 것 같습니다.");
-            Ui.Dim("      학교 구성 화면으로 들어가면 ⑤ 정리 에서 하나씩 고르실 수 있습니다.");
-            Ui.Dim("      '지난 학년도로 보관' 을 고르면 이름 앞에 연도를 붙이고 학생만 내보냅니다.");
-            Ui.Dim("      팀과 파일·대화는 그대로 남습니다.");
-            Console.WriteLine();
-            if (!Ui.Confirm("      들어갈까요?")) { Ui.Info("취소했습니다."); return; }
+            Ui.Dim("      화면의 [그룹 · 팀] 에서 '보관' 을 고르시면 됩니다.");
+            Ui.Dim("      이름 앞에 연도를 붙이고 학생만 내보냅니다 — 팀과 파일·대화는 그대로 남습니다.");
         }
 
         await RunM365Async(ct).ConfigureAwait(false);
@@ -1223,7 +1222,7 @@ public sealed class TeavelSession : IAsyncDisposable
             if (line is "도움말" or "help" or "?") { ShowHelp(); continue; }
 
             // 뒤에 값이 붙는 것들.
-            if (line is "m365" or "그룹" or "teams") { await RunM365Async(ct).ConfigureAwait(false); continue; }
+            if (line is "m365" or "그룹" or "teams" or "관리센터" or "관리" or "화면") { await RunM365Async(ct).ConfigureAwait(false); continue; }
             if (Split(line, "명단", "roster") is { } rosterArg)
             { RosterFlow.Run(rosterArg, AssumeYes); continue; }
             if (Split(line, "선생님", "교사", "teacher") is { } teacherArg)

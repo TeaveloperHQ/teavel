@@ -59,7 +59,7 @@ public sealed class M365Flow
         await using var host = await StartHostAsync(shell, ct).ConfigureAwait(false);
         if (host is null) return 2;
 
-        if (!await EnsureModulesAsync(host, ct).ConfigureAwait(false)) return 2;
+        if (!await EnsureModulesAsync(host, _assumeYes, ct).ConfigureAwait(false)) return 2;
         if (!await ConnectAsync(host, tree, ct).ConfigureAwait(false)) return 2;
 
         var inventory = await ReadInventoryAsync(host, ct).ConfigureAwait(false);
@@ -109,7 +109,7 @@ public sealed class M365Flow
         }
     }
 
-    private async Task<bool> EnsureModulesAsync(M365Host host, CancellationToken ct)
+    internal static async Task<bool> EnsureModulesAsync(M365Host host, bool assumeYes, CancellationToken ct)
     {
         Ui.Title("① 준비 확인");
 
@@ -125,7 +125,7 @@ public sealed class M365Flow
         Console.WriteLine();
         Ui.Dim("      모자란 것은 Teavel 이 대신 설치합니다.");
         Ui.Dim("      내 계정에만 설치되고 관리자 권한은 필요 없습니다.");
-        if (!_assumeYes && !Ui.Confirm("      지금 설치할까요?"))
+        if (!assumeYes && !Ui.Confirm("      지금 설치할까요?"))
         {
             Ui.Info("여기까지 하겠습니다. 모듈이 없으면 다음 단계로 갈 수 없습니다.");
             return false;

@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using Teavel.M365;
 using Teavel.Tools;
 
@@ -27,6 +27,27 @@ public sealed class AdminFlow
     private readonly ToolRunner _tools;
 
     public AdminFlow(ToolRunner tools) => _tools = tools;
+
+    /// <summary>
+    /// 이 자리에서 화면을 띄워도 되는지.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 화면이 <b>본길</b>이지만, 화면을 못 여는 자리가 있고 그때는 콘솔 흐름으로 간다.
+    /// 기능을 못 쓰게 되는 것이 아니라 길이 하나 더 있는 것이다.
+    /// </para>
+    /// <list type="bullet">
+    /// <item><b>입력이 파이프로 들어오면</b> 사람이 없다는 뜻이다. 가짜 테넌트 검증이
+    ///       답을 흘려 넣는 방식이라 여기서 화면을 띄우면 그 검증이 통째로 막힌다.</item>
+    /// <item><c>--yes</c> 도 사람이 없는 자리다.</item>
+    /// <item><c>TEAVEL_NO_GUI</c> 는 원격 접속처럼 브라우저가 곤란한 자리를 위한 구멍.</item>
+    /// </list>
+    /// </remarks>
+    public static bool Usable(bool assumeYes)
+        => !assumeYes
+        && Environment.UserInteractive
+        && !Console.IsInputRedirected
+        && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("TEAVEL_NO_GUI"));
 
     public async Task<int> RunAsync(CancellationToken ct)
     {
@@ -68,7 +89,9 @@ public sealed class AdminFlow
         {
             api = new AdminApi(host, tree, server.Token);
 
-            if (!await ReadyAsync(host, ct).ConfigureAwait(false)) return 2;
+            // 모듈 설치는 흐름 쪽 것을 그대로 쓴다. 여기서 '모자라니 teavel m365 를
+            // 실행하세요' 라고 하면, 그 명령도 이 화면으로 오므로 제자리를 돈다.
+            if (!await M365Flow.EnsureModulesAsync(host, assumeYes: false, ct).ConfigureAwait(false)) return 2;
             if (!await ConnectAsync(host, ct).ConfigureAwait(false)) return 2;
 
             Ui.Title("학교를 읽는 중");
@@ -102,22 +125,6 @@ public sealed class AdminFlow
                 await Task.Delay(300, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { /* Ctrl+C */ }
-    }
-
-    private static async Task<bool> ReadyAsync(M365Host host, CancellationToken ct)
-    {
-        Ui.Title("① 준비 확인");
-
-        var ready = await host.CallAsync("Get-TeavelM365Readiness", ct: ct).ConfigureAwait(false);
-        Ui.Info(ready.Message);
-        Ui.Details(ready.Details);
-
-        if (ready.Ok) return true;
-
-        Console.WriteLine();
-        Ui.Warn("필요한 PowerShell 모듈이 갖춰지지 않았습니다.");
-        Ui.Dim("      'teavel m365' 를 한 번 실행하시면 모듈을 대신 설치해 드립니다.");
-        return false;
     }
 
     /// <remarks>
