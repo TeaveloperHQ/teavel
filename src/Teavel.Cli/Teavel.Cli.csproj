@@ -2,24 +2,7 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <!--
-      net8.0-windows · WinForms — M365 관리 화면(Gui/) 때문이다.
-
-      반이 스무 개면 담임을 스무 번 순서대로 타이핑해야 했고, 중간에 되돌릴 수도
-      없었다. 목록을 놓고 고르는 자리는 창이 맞다.
-
-      OutputType 은 Exe 로 둔다 — 이것은 여전히 PowerShell 창에서 쓰는 콘솔 앱이고,
-      창은 필요한 자리에서만 열린다. WinExe 로 바꾸면 콘솔이 사라져 본체가 망가진다.
-
-      EnableWindowsTargeting 은 포털 때문이다. 포털은 이 저장소를 리눅스 도커에서
-      publish 하는데, 이것이 없으면 net8.0-windows 를 거기서 빌드하지 못한다.
-
-      Teavel.Core 는 net8.0 그대로 둔다. 판단은 전부 거기 있고, 그쪽은 리눅스에서
-      그대로 빌드·검증된다.
-    -->
-    <TargetFramework>net8.0-windows</TargetFramework>
-    <UseWindowsForms>true</UseWindowsForms>
-    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>Teavel.Cli</RootNamespace>
@@ -32,16 +15,23 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!--
-      WinForms 를 켜면 System.Windows.Forms 가 암시적 using 으로 온 파일에 딸려 온다.
-      그런데 Teavel 에는 이미 CheckState 라는 것이 있어(Teavel.Setup — 점검 결과의 상태)
-      이름이 부딪히고, 창과 아무 상관 없는 Ui.cs·TeavelSession.cs 가 빌드되지 않는다.
-
-      창을 쓰는 파일은 Gui\ 뿐이고 그쪽은 using 을 직접 적는다. 그러니 암시적인 것만 뺀다 —
-      본체가 창 때문에 흔들리지 않게 하는 것이 요점이다.
-    -->
-    <Using Remove="System.Windows.Forms" />
     <ProjectReference Include="..\Teavel.Core\Teavel.Core.csproj" />
+  </ItemGroup>
+
+  <!--
+    관리 화면(html·css·js)은 exe 안에 묻어서 간다.
+
+    포털은 publish 결과에서 .exe 하나만 집어 배포하고 옆에 있던 폴더는 버린다.
+    화면 파일이 그렇게 빠지면 관리 화면이 빈 페이지로 뜬다 — 스크립트·카탈로그와
+    같은 이유로 같은 방법을 쓴다.
+
+    LogicalName 을 'Teavel.Web.<파일>' 로 못 박는다. 기본 규칙은 폴더 이름을 점으로 잇고
+    파일 이름의 점까지 섞어 되짚기 어렵다.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="Web\wwwroot\**\*">
+      <LogicalName>Teavel.Web.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
   <!--

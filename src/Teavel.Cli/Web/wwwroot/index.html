@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Teavel — 학교 M365</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<!--
+  정식 관리 센터를 감추지 않는다. 대신 <b>여기서 하는 일이 아니라는 것</b>만 분명히 해 둔다.
+  이 화면의 목적은 학교가 실제로 하는 몇 가지만 남기는 것이고, 나머지가 필요할 때
+  어디로 가야 하는지는 알아야 한다.
+-->
+<div id="banner">
+  <span>이 화면에는 <b>학교에서 실제로 하는 일</b>만 담았습니다. 그 밖의 설정은 정식 관리 센터에서 하십니다.</span>
+  <a href="https://admin.microsoft.com" target="_blank" rel="noreferrer noopener">Microsoft 365 관리 센터 열기 ↗</a>
+</div>
+
+<div id="shell">
+  <nav id="side">
+    <div class="brand">
+      <b>Teavel</b>
+      <span id="school"></span>
+    </div>
+
+    <a class="nav" href="#/한눈에"><i>①</i> 한눈에</a>
+    <a class="nav" href="#/그룹"><i>②</i> 그룹 · 팀 <em id="tag-groups"></em></a>
+    <a class="nav" href="#/명단"><i>③</i> 명단 <em id="tag-roster"></em></a>
+    <a class="nav" href="#/만들기"><i>④</i> 반 팀 만들기 <em id="tag-plan"></em></a>
+    <a class="nav" href="#/구성원"><i>⑤</i> 구성원 넣기</a>
+    <a class="nav" href="#/담임"><i>⑥</i> 담임 <em id="tag-owner"></em></a>
+    <a class="nav" href="#/사람"><i>⑦</i> 사람 · 이름</a>
+
+    <div class="grow"></div>
+
+    <button id="refresh" class="ghost">다시 읽기</button>
+    <button id="quit" class="ghost">끝내기</button>
+  </nav>
+
+  <main id="page"><div class="loading">읽는 중…</div></main>
+</div>
+
+<!-- 오래 걸리는 일이 돌 때만 올라온다. 화면이 멈춘 것처럼 보이면 관리자가 창을 닫는다. -->
+<div id="drawer" hidden>
+  <div id="drawer-head">
+    <b id="drawer-title"></b>
+    <span id="drawer-state">돌고 있습니다…</span>
+    <button id="drawer-close" hidden>닫기</button>
+  </div>
+  <div id="drawer-lines"></div>
+</div>
+
+<div id="toast" hidden></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

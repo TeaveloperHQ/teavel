@@ -1,5 +1,4 @@
-﻿using Teavel.Cli.Gui;
-using Teavel.M365;
+﻿using Teavel.M365;
 using Teavel.Roster;
 using Teavel.Tools;
 
@@ -572,35 +571,10 @@ public sealed class M365Flow
             return inventory;
         }
 
-        // 정리는 견주어 보는 일이다 — 이건 시험용 잔재고 저건 진짜 수업 그룹이고.
-        // 콘솔에서는 하나씩 묻고 넘어가 앞의 판단을 고칠 수 없었다.
-        if (Desk.Available)
-        {
-            Console.WriteLine();
-            if (Ui.Confirm($"      {candidates.Count}개를 창에서 한눈에 보고 정하시겠습니까?"))
-            {
-                Desk.Handoff();
-
-                var rows = candidates.Select(t =>
-                {
-                    var y = YearOf(t.Group);
-                    return new TidyRow(t, y.Length > 0 ? $"{y} {t.Group.DisplayName}" : "");
-                }).ToList();
-
-                var decided = TidyWindow.Open(rows);
-                if (decided is not null)
-                {
-                    await ApplyTidyAsync(host, inventory, decided, ct).ConfigureAwait(false);
-                    return inventory;
-                }
-
-                // 창을 닫은 것은 '그만두겠다' 가 아니라 '창은 됐다' 일 수 있다. 콘솔로 이어 간다.
-                Ui.Info("창을 닫으셨습니다.");
-            }
-        }
-
+        // 정리는 견주어 보는 일인데 콘솔은 하나씩 묻고 넘어간다 — 앞의 판단을 고칠 수 없다.
+        // 목록을 놓고 견주는 것은 관리 화면(teavel 관리센터)에서 한다.
         Console.WriteLine();
-        Ui.Dim("      하나씩 여쭙겠습니다.");
+        Ui.Dim("      하나씩 여쭙겠습니다. 한눈에 보고 고르시려면 'teavel 관리센터' 를 쓰세요.");
 
         foreach (var t in candidates)
         {
@@ -808,7 +782,7 @@ public sealed class M365Flow
     /// 지난 학년도 팀을 보관할 때 이름 앞에 붙일 연도다. 지금 연도가 아니라
     /// <b>그 팀이 만들어진 연도</b>를 쓴다 — 재작년 것을 올해 연도로 붙이면 거짓이 된다.
     /// </remarks>
-    private static string YearOf(ExistingGroup g)
+    internal static string YearOf(ExistingGroup g)
     {
         var c = g.Created.Trim();
         return c.Length >= 4 && int.TryParse(c[..4], out var y) && y is > 2000 and < 2100
@@ -994,7 +968,7 @@ public sealed class M365Flow
     }
 
     /// <summary>만들기 결과에 실려 온 그룹 id. 없으면 빈 문자열.</summary>
-    private static string ExtractGroupId(IEnumerable<string> details)
+    internal static string ExtractGroupId(IEnumerable<string> details)
     {
         foreach (var line in details)
         {
@@ -1125,19 +1099,8 @@ public sealed class M365Flow
 
         // 여기까지는 '전부 넣거나 전부 안 넣거나' 둘뿐이었다. 한 반만 빼거나 전학 간 아이
         // 하나를 빼려면 명단 파일을 고쳐 다시 돌리는 수밖에 없었는데, 그건 관리자가 할 일이 아니다.
+        // 반 하나만 빼거나 전학 간 아이 하나를 빼는 것은 관리 화면(teavel 관리센터)에서 한다.
         List<MemberPick>? picks = null;
-
-        if (Desk.Available && !_assumeYes)
-        {
-            Console.WriteLine();
-            if (Ui.Confirm("      창에서 반과 사람을 보고 고르시겠습니까?"))
-            {
-                Desk.Handoff();
-                var chosen = MemberWindow.Open(assignments);
-                if (chosen is not null) picks = chosen.ToList();
-                else Ui.Info("창을 닫으셨습니다.");
-            }
-        }
 
         if (picks is null)
         {
@@ -1261,51 +1224,6 @@ public sealed class M365Flow
         var faculty = UserDirectory.GuessFaculty(UserDirectory.Cluster(people))?.Bundle;
         var done = 0;
 
-        // 반 스무 개면 아래 물음이 스무 번이다. 앞에서 적은 것을 고칠 수도, 몇 개나 정했는지
-        // 볼 수도 없었다. 창에서는 고를 것이 이미 목록에 있고 한 화면에 다 보인다.
-        if (Desk.Available)
-        {
-            Console.WriteLine();
-            if (Ui.Confirm("      창에서 한눈에 보고 정하시겠습니까?"))
-            {
-                Desk.Handoff();
-
-                // 이미 담임이 있는 반도 함께 올린다. 남은 것만 보이면 스무 반 중 몇 반이
-                // 이미 됐는지가 안 보이고, 관리자는 남은 여덟 개가 전부인 줄 안다.
-                var rows = teams.Select(a => new OwnerRow(
-                    a.ClassKey, a.Team!.DisplayName, a.Team!.GroupId,
-                    OwnerNameOf(a.Team!.GroupId, have, people))).ToList();
-
-                var picked = OwnerWindow.Open(rows, TeacherFinder.Faculty(people, faculty));
-
-                if (picked is not null)
-                {
-                    if (picked.Count == 0) { Console.WriteLine(); Ui.Info("담임을 정하지 않으셨습니다. 나중에 하셔도 됩니다."); return; }
-
-                    Console.WriteLine();
-                    foreach (var p in picked)
-                    {
-                        var res = await host.CallAsync("Add-TeavelTeamMember", new Dictionary<string, object?>
-                        {
-                            ["GroupId"] = p.GroupId,
-                            ["Users"] = new[] { p.Teacher.Upn },
-                            ["Role"] = "Owner",
-                        }, timeout: TimeSpan.FromMinutes(2), ct: ct).ConfigureAwait(false);
-
-                        if (res.Ok) { Ui.Ok($"{p.ClassKey} 담임 — {p.Teacher.DisplayName} ({p.Teacher.Upn})"); done++; }
-                        else { Ui.Error($"{p.ClassKey} — {res.Message}"); Ui.Details(res.Details); }
-                    }
-
-                    Console.WriteLine();
-                    Ui.Info($"담임 {done}명을 지정했습니다.");
-                    if (done < need.Count)
-                        Ui.Dim($"      {need.Count - done}개 반은 나중에 다시 실행해서 정하시면 됩니다.");
-                    return;
-                }
-
-                Ui.Info("창을 닫으셨습니다.");
-            }
-        }
 
         foreach (var a in need)
         {

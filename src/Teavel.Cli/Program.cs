@@ -71,6 +71,7 @@ try
         "삭제" or "지우기" or "제거" or "uninstall" or "remove" => session.RunUninstall(),
         "자가점검" or "selfcheck"     => await session.RunSelfCheckAsync(cancel.Token),
         "m365" or "그룹" or "teams"   => await session.RunM365Async(cancel.Token),
+        "관리센터" or "관리" or "화면" or "admin" => await session.RunAdminAsync(cancel.Token),
         "명단" or "roster"            => RosterFlow.Run(argument, assumeYes),
         "선생님" or "교사" or "teacher" => await session.RunFindTeacherAsync(argument, cancel.Token),
         "도움말" or "help" or "--help" => Run(PrintHelp),

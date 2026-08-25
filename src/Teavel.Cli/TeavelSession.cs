@@ -285,6 +285,17 @@ public sealed class TeavelSession : IAsyncDisposable
         => new M365Flow(_tools, AssumeYes).RunAsync(ct);
 
     /// <summary>
+    /// 브라우저에 관리 화면을 띄운다.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="RunM365Async"/> 는 <b>처음 한 번</b>을 위한 흐름이라 아홉 단계를 순서대로 지난다.
+    /// 학기 중에 전학생 한 명을 넣거나 담임 한 반을 고칠 때는 그 순서가 짐이 된다.
+    /// 이쪽은 단계가 없고, 할 일을 골라 그것만 한다.
+    /// </remarks>
+    public Task<int> RunAdminAsync(CancellationToken ct)
+        => new Web.AdminFlow(_tools).RunAsync(ct);
+
+    /// <summary>
     /// 형태소 분석기를 갖춘다. 이미 있으면 아무것도 하지 않는다.
     /// </summary>
     /// <remarks>
