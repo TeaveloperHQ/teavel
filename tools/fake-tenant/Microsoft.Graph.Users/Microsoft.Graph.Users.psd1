@@ -1,0 +1,1 @@
+﻿@{ ModuleVersion='99.0.0'; RootModule='Microsoft.Graph.Users.psm1'; GUID='d91ef18d-7991-4aad-b3f5-b6b0df0eae72'; FunctionsToExport='*' }

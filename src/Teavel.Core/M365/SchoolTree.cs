@@ -101,9 +101,20 @@ public sealed class SchoolTree
     /// <summary>문제 없이 읽혔는지.</summary>
     public bool Ok => Problems.Count == 0;
 
-    /// <summary>exe 옆의 catalog\m365-tree.json 을 읽는다.</summary>
+    /// <summary>
+    /// 이 학교의 선언을 읽는다.
+    /// </summary>
+    /// <remarks>
+    /// <b>학교가 정한 것이 있으면 그것이 이긴다.</b> 없으면 묻어 온 원본을 쓴다.
+    ///
+    /// 묻어 온 쪽을 고쳐 봐야 소용이 없다 — <see cref="Platform.Payload"/> 가 켤 때마다
+    /// 원본과 견줘 다르면 도로 덮어쓴다. 그래서 학교가 정한 것은 payload 가 손대지 않는
+    /// 자리에 따로 둔다(<see cref="SchoolChoice"/>).
+    /// </remarks>
     public static SchoolTree Load(string appDirectory)
-        => LoadFrom(Path.Combine(Platform.Payload.Ensure(appDirectory, "catalog"), "m365-tree.json"));
+        => SchoolChoice.Exists
+            ? LoadFrom(SchoolChoice.Path)
+            : LoadFrom(Path.Combine(Platform.Payload.Ensure(appDirectory, "catalog"), "m365-tree.json"));
 
     /// <summary>지정한 경로에서 읽는다. 파일이 없으면 빈 트리.</summary>
     public static SchoolTree LoadFrom(string path)

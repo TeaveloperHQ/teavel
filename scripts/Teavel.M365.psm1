@@ -1276,6 +1276,124 @@ function Get-TeavelCohort {
     }
 }
 
+<#
+    ── 비밀번호 ──────────────────────────────────────────────────────────
+
+    이것 하나만 Microsoft Graph 가 필요하다.
+
+    Exchange 에도 Teams 에도 비밀번호 cmdlet 이 없고(실측), MSOnline·AzureAD 는
+    2025-05-30 에 은퇴했다. 남은 길이 Graph 하나뿐이다.
+
+    그래서 여기만 별도로 붙는다. 그룹·팀·구성원은 지금까지처럼 자체 모듈로 하고,
+    Graph 는 관리자가 비밀번호를 실제로 바꾸려 할 때 그때 연결한다.
+    권한도 딱 하나만 받는다 — User-PasswordProfile.ReadWrite.All.
+#>
+
+function Get-TeavelGraphReadiness {
+    param()
+
+    $need = @('Microsoft.Graph.Authentication', 'Microsoft.Graph.Users')
+    $miss = @()
+    $have = New-Object System.Collections.Generic.List[string]
+
+    foreach ($n in $need) {
+        $m = Get-Module -ListAvailable -Name $n | Sort-Object Version -Descending | Select-Object -First 1
+        if ($m) { $have.Add(('{0,-32} {1}' -f $n, $m.Version)) } else { $miss += $n }
+    }
+
+    if ($miss.Count -gt 0) {
+        $have.Add('')
+        $have.Add(('없는 것: ' + ($miss -join ', ')))
+        return New-TeavelResult -Message '비밀번호를 바꾸려면 모듈을 더 갖춰야 합니다.' -Details $have.ToArray()
+    }
+
+    New-TeavelResult -Message '비밀번호를 바꿀 준비가 돼 있습니다.' -Details $have.ToArray()
+}
+
+function Install-TeavelGraphModule {
+    param([string] $Version = '2.39.0')
+
+    $dir = Get-TeavelModuleDirectory
+    $d = New-Object System.Collections.Generic.List[string]
+
+    foreach ($n in @('Microsoft.Graph.Authentication', 'Microsoft.Graph.Users')) {
+        if (Get-Module -ListAvailable -Name $n) { $d.Add("$n — 이미 있습니다"); continue }
+        Write-Host "  $n 내려받는 중…"
+        Install-TeavelModuleFromGallery -Name $n -Version $Version -Directory $dir
+        $d.Add("$n $Version — 받았습니다")
+    }
+
+    New-TeavelResult -Message '갖췄습니다.' -Details $d.ToArray()
+}
+
+function Connect-TeavelGraph {
+    param([string[]] $Scopes = @('User-PasswordProfile.ReadWrite.All'))
+
+    Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
+
+    # 이미 그 권한으로 붙어 있으면 아무 말 없이 그대로 쓴다.
+    $ctx = $null
+    try { $ctx = Get-MgContext -ErrorAction Stop } catch { }
+
+    if ($ctx -and $ctx.Scopes) {
+        $missing = @($Scopes | Where-Object { $_ -notin $ctx.Scopes })
+        if ($missing.Count -eq 0) {
+            return New-TeavelResult -Message '이미 연결돼 있습니다.' -Details @("계정: $($ctx.Account)")
+        }
+    }
+
+    # ── 멈추기 전에 먼저 말한다 ──
+    # 이 로그인은 앞의 둘과 다르다. 처음 보는 동의 화면이 뜨고, 거기서 관리자가
+    # 겁을 먹고 [취소] 를 누르면 이 기능이 통째로 막힌다. 무엇에 동의하는지 미리 적는다.
+    Write-Host ''
+    Write-Host '  ┌─────────────────────────────────────────────────┐'
+    Write-Host '  │  비밀번호를 바꾸려면 권한을 한 번 허용해야 합니다 │'
+    Write-Host '  └─────────────────────────────────────────────────┘'
+    Write-Host ''
+    Write-Host '  ① 인터넷 창이 열리고 학교 계정으로 로그인합니다'
+    Write-Host '  ② "요청한 권한" 화면이 나옵니다'
+    Write-Host '  ③ 적혀 있는 것은 하나입니다 — 사용자 비밀번호 프로필 읽기/쓰기'
+    Write-Host '  ④ [수락] 을 누릅니다'
+    Write-Host ''
+    Write-Host '  이 허용은 비밀번호를 바꾸는 것 말고는 아무것도 못 합니다.'
+    Write-Host '  그리고 관리자 권한이 없는 선생님은 이 허용이 있어도 남의 비밀번호를 못 바꿉니다.'
+    Write-Host ''
+    Write-Host '  기다리는 중…'
+    Write-Host ''
+
+    Connect-MgGraph -Scopes $Scopes -NoWelcome -ErrorAction Stop
+
+    $ctx = Get-MgContext -ErrorAction Stop
+    if (-not $ctx) { throw '연결되지 않았습니다.' }
+
+    $missing = @($Scopes | Where-Object { $_ -notin $ctx.Scopes })
+    if ($missing.Count -gt 0) {
+        throw ('권한을 받지 못했습니다: ' + ($missing -join ', ') + '. [수락] 을 누르셨는지 확인해 주세요.')
+    }
+
+    New-TeavelResult -Message '연결했습니다.' -Details @("계정: $($ctx.Account)")
+}
+
+function Reset-TeavelPassword {
+    param(
+        [Parameter(Mandatory)][string] $Identity,
+        [Parameter(Mandatory)][string] $Password,
+        [bool] $MustChange = $true
+    )
+
+    Import-Module Microsoft.Graph.Users -ErrorAction Stop
+
+    Invoke-TeavelWrite -Command 'Update-MgUser' -Arguments @{
+        UserId          = $Identity
+        PasswordProfile = @{
+            Password                      = $Password
+            ForceChangePasswordNextSignIn = $MustChange
+        }
+    }
+
+    New-TeavelResult -Message "$Identity — 임시 비밀번호로 바꿨습니다." -Details @()
+}
+
 Export-ModuleMember -Function `
     Test-TeavelUnderOneDrive, Get-TeavelStudentId, Get-TeavelCohort, `
     Get-TeavelModuleDirectory, Get-TeavelM365Readiness, Install-TeavelM365Module, `
@@ -1285,4 +1403,5 @@ Export-ModuleMember -Function `
     Get-TeavelUserName, Set-TeavelDisplayName, `
     New-TeavelM365Group, Sync-TeavelTeamChannel, `
     Get-TeavelTeamMember, Add-TeavelTeamMember, Remove-TeavelTeamStudent, `
-    Rename-TeavelM365Group, Remove-TeavelM365Group
+    Rename-TeavelM365Group, Remove-TeavelM365Group, `
+    Get-TeavelGraphReadiness, Install-TeavelGraphModule, Connect-TeavelGraph, Reset-TeavelPassword

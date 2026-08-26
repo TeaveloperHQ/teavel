@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Teavel.M365;
 using Teavel.Roster;
 
@@ -33,7 +34,9 @@ public sealed class AdminApi
     };
 
     private readonly M365Host _host;
-    private readonly SchoolTree _tree;
+
+    /// <summary>학교 구조 선언. 화면에서 손보면 다시 읽으므로 붙박이가 아니다.</summary>
+    private SchoolTree _tree;
     private readonly JobBoard _jobs = new();
     private readonly string _token;
 
@@ -43,6 +46,7 @@ public sealed class AdminApi
     private string _rosterName = "";
     private readonly Dictionary<string, IReadOnlyList<TeamMember>> _members = new(StringComparer.OrdinalIgnoreCase);
     private bool _teamsReady;
+    private bool _graphReady;
     private bool _scanned;
 
     /// <summary>화면에서 [끝내기] 를 눌렀는지. 콘솔이 이것을 보고 판을 접는다.</summary>
@@ -105,12 +109,18 @@ public sealed class AdminApi
             "/api/groups/rename" => await RenameAsync(ask, ct).ConfigureAwait(false),
             "/api/groups/archive" => Ok(StartArchive(ask, ct)),
             "/api/groups/delete" => Ok(StartDelete(ask, ct)),
-            "/api/plan/create" => Ok(StartCreate(ct)),
+            "/api/plan/create" => Ok(StartCreate(Str(Body(ask), "kind"), ct)),
             "/api/classes/scan" => Ok(StartScan(ct)),
             "/api/members/add" => Ok(StartAddMembers(ask, ct)),
             "/api/owners/assign" => Ok(StartAssignOwners(ask, ct)),
             "/api/people/rename" => await RenamePersonAsync(ask, ct).ConfigureAwait(false),
             "/api/roster" => Ok(TakeRoster(ask)),
+            "/api/tree/drop" => Ok(DropDeclared(ask)),
+            "/api/tree/reset" => Ok(ResetDeclared()),
+            "/api/password/ready" => await GraphReadyAsync(ct).ConfigureAwait(false),
+            "/api/password/install" => Ok(StartGraphInstall(ct)),
+            "/api/password/reset" => Ok(StartReset(ask, ct)),
+            "/api/password/result" => Ok(ResetResult(ask.Q("id"))),
             "/api/refresh" => Ok(StartRefresh(ct)),
             "/api/quit" => Quit(),
 
@@ -161,12 +171,50 @@ public sealed class AdminApi
 
     private object Hello() => new
     {
-        school = _tree.Source,
+        school = _tree.School,
+        own = SchoolChoice.Own(_tree),
         roster = _rosterName,
         rosterRows = _roster?.Rows.Count(r => r.Ok) ?? 0,
         teamsReady = _teamsReady,
+        graphReady = _graphReady,
         busy = _jobs.Busy,
     };
+
+    /// <summary>
+    /// 선언 하나를 이 학교에서 뺀다.
+    /// </summary>
+    /// <remarks>
+    /// <b>테넌트는 건드리지 않는다.</b> '이 학교에는 이것이 없어도 된다' 고 정하는 것뿐이고,
+    /// 이미 만들어져 있는 그룹은 그대로 있다. 그래서 되돌리기도 쉽다.
+    /// </remarks>
+    private object DropDeclared(HttpAsk ask)
+    {
+        var body = Body(ask);
+        var id = Str(body, "id");
+        var name = Str(body, "name");
+
+        if (id.Length == 0 && name.Length == 0)
+            return new { ok = false, message = "무엇을 뺄지 받지 못했습니다." };
+
+        if (!SchoolChoice.Drop(AppContext.BaseDirectory, id, name))
+            return new { ok = false, message = "그 선언을 찾지 못했습니다." };
+
+        _tree = SchoolTree.Load(AppContext.BaseDirectory);
+        return new { ok = true, message = $"'{(name.Length > 0 ? name : id)}' 을(를) 이 학교 목록에서 뺐습니다." };
+    }
+
+    /// <summary>학교가 정한 것을 버리고 처음 상태로 돌아간다.</summary>
+    private object ResetDeclared()
+    {
+        var had = SchoolChoice.Reset();
+        _tree = SchoolTree.Load(AppContext.BaseDirectory);
+
+        return new
+        {
+            ok = true,
+            message = had ? "처음 상태로 되돌렸습니다." : "이미 처음 상태입니다.",
+        };
+    }
 
     /// <summary>
     /// 재고를 나눈 것. <b>선언에 있는 것은 정리 후보에서 뺀다.</b>
@@ -201,16 +249,28 @@ public sealed class AdminApi
         var split = _people.Count(p => UserDirectory.IsOutsider(p) == false
                                     && p.DisplayName.Trim().Length == 0);
 
+        var make = plan.Where(p => p.Action == PlanAction.Create).ToList();
+
         return new
         {
             groups = _inventory.Count,
             teams = _inventory.Count(g => g.IsTeam),
             people = _people.Count,
             unlicensed = clusters.Where(c => c.Unlicensed).Sum(c => c.Count),
+
             candidates = triaged.Count(t => t.Candidate),
-            toCreate = plan.Count(p => p.Action == PlanAction.Create && p.Declared.Kind != GroupKind.Security),
+
+            // 낱장이 팀과 그룹으로 갈렸으므로 왼쪽 메뉴의 숫자도 갈라 준다.
+            // 한 숫자를 두 곳에 걸어 두면 어느 쪽을 눌러야 하는지 알 수 없다.
+            candidateTeams = triaged.Count(t => t.Candidate && t.Item.Group.IsTeam),
+            candidateGroups = triaged.Count(t => t.Candidate && !t.Item.Group.IsTeam),
+
+            toCreate = make.Count(p => p.Declared.Kind != GroupKind.Security),
+            toCreateTeams = make.Count(p => p.Declared.Kind == GroupKind.Team),
+            toCreateGroups = make.Count(p => p.Declared.Kind == GroupKind.M365),
+
             conflicts = plan.Count(p => p.Action == PlanAction.Conflict),
-            security = plan.Count(p => p.Action == PlanAction.Create && p.Declared.Kind == GroupKind.Security),
+            security = make.Count(p => p.Declared.Kind == GroupKind.Security),
             nameless = split,
             licenses = clusters.Select(c => new
             {
@@ -259,8 +319,11 @@ public sealed class AdminApi
         {
             summary = TreeReconciler.Summarize(plan),
             fromRoster = _roster is not null,
+            own = SchoolChoice.Own(_tree),
             rows = plan.Select(p => new
             {
+                // 선언의 id — 화면에서 '이 학교엔 필요 없습니다' 를 누를 때 이것으로 되짚는다.
+                id = p.Declared.Id,
                 name = p.Declared.DisplayName,
                 alias = p.Declared.MailNickname,
                 kind = p.Declared.Kind.ToString(),
@@ -277,24 +340,294 @@ public sealed class AdminApi
         };
     }
 
+    /// <summary>
+    /// 학교 사람 명부.
+    /// </summary>
+    /// <remarks>
+    /// <b>교사인지 학생인지 Teavel 이 단정하지 않는다.</b> 라이선스 묶음과 아이디 생김새를
+    /// 나란히 보여 주면 관리자가 한눈에 가른다 — 학생 아이디는 학번 꼴이고 교사는 아니다.
+    /// SKU 이름을 알아내려 들지 않는 것이 이 방식의 요점이라, 묶음에는 크기로 이름을 붙인다.
+    /// </remarks>
+    /// <summary>표시 이름이 <c>10101홍길동</c> 꼴인지. 학생 계정의 아주 또렷한 표시다.</summary>
+    private static readonly Regex StudentName = new(@"^(\d{3,7})\s*[가-힣]{2,5}$", RegexOptions.Compiled);
+
     private object People()
     {
         var clusters = UserDirectory.Cluster(_people);
         var faculty = UserDirectory.GuessFaculty(clusters)?.Bundle;
 
+        // 교사 묶음을 뺀 나머지 중 가장 큰 것이 대개 학생이다.
+        var students = clusters
+            .Where(c => !c.Unlicensed)
+            .Where(c => !string.Equals(c.Bundle, faculty, StringComparison.Ordinal))
+            .OrderByDescending(c => c.Count)
+            .FirstOrDefault()?.Bundle;
+
+        var size = clusters.ToDictionary(c => c.Bundle, c => c.Count, StringComparer.Ordinal);
+        var mine = Membership();
+
+        // 학년·반은 명단이 가장 확실하다. 명단이 없거나 그 사람이 명단에 없으면
+        // 표시 이름 앞의 학번을 가른다.
+        var byRoster = new Dictionary<string, (string Grade, string ClassNo)>(StringComparer.OrdinalIgnoreCase);
+        if (_roster is not null)
+            foreach (var r in _roster.Rows.Where(r => r.Ok && r.Upn.Length > 0))
+                byRoster[r.Upn] = (r.Grade, r.ClassNo);
+
+        var format = GuessIdFormat();
+
         return new
         {
             summary = UserDirectory.Summarize(clusters, _people),
-            rows = _people.Select(p => new
+            scanned = _scanned,
+            hasRoster = _roster is not null,
+            rows = _people.Select(p =>
             {
-                upn = p.Upn,
-                name = p.DisplayName,
-                department = p.Department,
-                licensed = !p.AccountType.Equals("IneligibleUser", StringComparison.OrdinalIgnoreCase),
-                outsider = UserDirectory.IsOutsider(p),
-                faculty = faculty is { Length: > 0 } && string.Equals(p.LicenseBundle, faculty, StringComparison.Ordinal),
+                var licensed = !p.AccountType.Equals("IneligibleUser", StringComparison.OrdinalIgnoreCase)
+                            && p.LicenseBundle.Length > 0;
+
+                var digits = StudentName.Match(p.DisplayName.Trim());
+                var outsider = UserDirectory.IsOutsider(p);
+
+                // 갈래를 정하는 순서가 있다. 라이선스 묶음이 가장 믿을 만하지만,
+                // 학번+이름 표시는 그 자체로 또렷해서 묶음을 못 알아봐도 학생을 가른다.
+                var role = outsider ? "학교 밖"
+                    : !licensed ? "라이선스 없음"
+                    : faculty is { Length: > 0 } && string.Equals(p.LicenseBundle, faculty, StringComparison.Ordinal) ? "교사"
+                    : digits.Success ? "학생"
+                    : students is { Length: > 0 } && string.Equals(p.LicenseBundle, students, StringComparison.Ordinal) ? "학생"
+                    : "그 밖";
+
+                var grade = "";
+                var classNo = "";
+
+                if (byRoster.TryGetValue(p.Upn, out var got)) (grade, classNo) = got;
+                else if (digits.Success && format is not null
+                      && format.TryDecompose(digits.Groups[1].Value, out var g, out var c, out _))
+                { grade = g; classNo = c; }
+
+                return new
+                {
+                    upn = p.Upn,
+                    name = p.DisplayName,
+                    department = p.Department,
+                    licensed,
+                    outsider,
+                    role,
+                    grade,
+                    classNo,
+                    license = role is "교사" or "학생" ? role : role == "라이선스 없음" ? "없음" : "그 밖",
+                    licenseCount = size.TryGetValue(p.LicenseBundle, out var n) ? n : 0,
+                    groups = mine.TryGetValue(p.Upn, out var gs) ? gs : new List<string>(),
+                };
             }),
         };
+    }
+
+    // ───────────────────────────── 비밀번호 ─────────────────────────────
+    //
+    // 이것 하나만 Microsoft Graph 를 쓴다. Exchange 에도 Teams 에도 비밀번호 cmdlet 이
+    // 없고(실측), MSOnline·AzureAD 는 2025-05-30 에 은퇴했다. 남은 길이 이것뿐이다.
+    //
+    // 그래서 <b>관리자가 실제로 비밀번호를 바꾸려 할 때</b> 그때 연결한다.
+    // 읽기만 하다 끝내는 관리자는 동의 화면을 아예 보지 않는다.
+
+    /// <summary>바꾼 비밀번호. <b>메모리에만, 한 판 동안만</b> 둔다.</summary>
+    /// <remarks>
+    /// 디스크에 적지 않는다. 화면이 한 번 받아 가 종이로 옮기면 그것으로 끝이고,
+    /// 프로그램이 꺼지면 사라진다. 다시 알아낼 방법은 없으며 그게 맞다 —
+    /// 남아 있으면 언젠가 새 나간다.
+    /// </remarks>
+    private readonly Dictionary<string, List<object>> _slips = new(StringComparer.Ordinal);
+
+    private async Task<HttpSay> GraphReadyAsync(CancellationToken ct)
+    {
+        var res = await _host.CallAsync("Get-TeavelGraphReadiness", ct: ct).ConfigureAwait(false);
+        return Ok(new { ok = res.Ok, ready = res.Ok && !res.Message.Contains("갖춰야", StringComparison.Ordinal),
+                        message = res.Message, details = res.Details });
+    }
+
+    private object StartGraphInstall(CancellationToken ct)
+        => Started(_jobs.Start("비밀번호 기능 갖추기", async (job, jct) =>
+        {
+            job.Info("모듈을 내려받습니다. 몇 분 걸릴 수 있습니다.");
+
+            var res = await _host.CallAsync("Install-TeavelGraphModule",
+                timeout: TimeSpan.FromMinutes(15), ct: jct).ConfigureAwait(false);
+
+            if (res.Ok) { job.Ok(res.Message); job.Details(res.Details); job.Finish("갖췄습니다."); }
+            else { job.Error(res.Message); job.Details(res.Details); job.Finish("갖추지 못했습니다."); }
+        }, ct));
+
+    /// <summary>
+    /// 임시 비밀번호로 바꾼다.
+    /// </summary>
+    /// <remarks>
+    /// <b>한 사람이 막혀도 나머지는 마저 한다.</b> 자기 자신이나 상급 관리자의 비밀번호는
+    /// 못 바꾸는데, 반 서른 명 중 하나가 그런 계정이라고 스물아홉을 못 하면 안 된다.
+    /// </remarks>
+    private object StartReset(HttpAsk ask, CancellationToken ct)
+    {
+        var body = Body(ask);
+        var upns = Arr(body, "upns");
+        var mustChange = !body.TryGetProperty("mustChange", out var mc) || mc.ValueKind != JsonValueKind.False;
+        var label = Str(body, "label");
+
+        if (upns.Count == 0) return new { ok = false, message = "누구의 비밀번호를 바꿀지 받지 못했습니다." };
+
+        // 비밀번호는 여기서 만든다. 판단은 C# 에 두고 PowerShell 은 받은 값을 넣기만 한다.
+        var made = PasswordMaker.Many(upns.Count);
+        var byUpn = _people.ToDictionary(p => p.Upn, p => p.DisplayName, StringComparer.OrdinalIgnoreCase);
+
+        var job = _jobs.Start(label.Length > 0 ? label : $"비밀번호 {upns.Count}명", async (j, jct) =>
+        {
+            if (!await EnsureGraphAsync(j, jct).ConfigureAwait(false)) { j.Finish("연결하지 못했습니다."); return; }
+
+            var slips = new List<object>();
+            var failed = 0;
+
+            for (var i = 0; i < upns.Count; i++)
+            {
+                jct.ThrowIfCancellationRequested();
+
+                var upn = upns[i];
+                var pw = made[i];
+                var name = byUpn.TryGetValue(upn, out var n) ? n : "";
+
+                var res = await _host.CallAsync("Reset-TeavelPassword", new Dictionary<string, object?>
+                {
+                    ["Identity"] = upn,
+                    ["Password"] = pw,
+                    ["MustChange"] = mustChange,
+                }, timeout: TimeSpan.FromMinutes(2), ct: jct).ConfigureAwait(false);
+
+                if (res.Ok)
+                {
+                    // 진행에는 비밀번호를 적지 않는다. 진행 줄은 콘솔에도 흐르고
+                    // 관리자가 화면을 남에게 보여 줄 수도 있다.
+                    j.Ok($"{(name.Length > 0 ? name : upn)} — 바꿨습니다.");
+                    slips.Add(new { upn, name, password = pw });
+                }
+                else
+                {
+                    j.Warn($"{(name.Length > 0 ? name : upn)} — {res.Message}");
+                    failed++;
+                }
+            }
+
+            _slips[j.Id] = slips;
+
+            if (slips.Count > 0)
+            {
+                j.Dim("바뀐 비밀번호는 이 화면에서 한 번만 받아 가실 수 있습니다.");
+                j.Dim("내려받아 종이로 옮기신 뒤에는 그 파일을 지워 주세요.");
+            }
+
+            j.Finish(failed == 0
+                ? $"{slips.Count}명의 비밀번호를 바꿨습니다."
+                : $"{slips.Count}명은 바꾸고 {failed}명은 못 바꿨습니다.");
+        }, ct);
+
+        return new { ok = true, jobId = job.Id, title = job.Title };
+    }
+
+    /// <summary>
+    /// 바뀐 비밀번호를 <b>한 번만</b> 내준다.
+    /// </summary>
+    /// <remarks>
+    /// 내주고 곧바로 지운다. 화면이 종이로 옮길 파일을 만들 수 있으면 그것으로 할 일은
+    /// 끝났고, 그 뒤로도 들고 있으면 언젠가 새 나간다.
+    /// </remarks>
+    private object ResetResult(string jobId)
+    {
+        if (!_slips.Remove(jobId, out var slips))
+            return new { ok = false, message = "받아 갈 것이 없습니다. 이미 한 번 받아 가셨거나, 바뀐 것이 없습니다." };
+
+        return new { ok = true, rows = slips };
+    }
+
+    /// <summary>
+    /// Graph 에 붙는다. 비밀번호를 정말 바꾸려 할 때만 부른다.
+    /// </summary>
+    /// <remarks>
+    /// 여기서 처음 보는 <b>동의 화면</b>이 뜬다. 그 화면에서 겁을 먹고 [취소] 를 누르면
+    /// 이 기능이 통째로 막히므로, 무엇에 동의하는지는 PowerShell 쪽이 미리 적어 흘려보낸다.
+    /// </remarks>
+    private async Task<bool> EnsureGraphAsync(Job job, CancellationToken ct)
+    {
+        if (_graphReady) return true;
+
+        var res = await _host.CallAsync("Connect-TeavelGraph",
+            timeout: TimeSpan.FromMinutes(20), ct: ct).ConfigureAwait(false);
+
+        if (res.Ok) { _graphReady = true; job.Ok(res.Message); job.Details(res.Details); return true; }
+
+        job.Error(res.Message);
+        job.Details(res.Details);
+        return false;
+    }
+
+    /// <summary>
+    /// 학번을 학년·반·번호로 가르는 형식.
+    /// </summary>
+    /// <remarks>
+    /// 학교마다 다르다 — <c>10301</c> 인 곳도 있고 <c>1301</c> 인 곳도 있다. 짐작하면 반드시 틀리므로
+    /// 자료에서 알아낸다. <b>명단이 있으면 그쪽이 가장 확실하다</b> — 학번과 학년·반·번호가
+    /// 나란히 있어 맞춰 볼 수 있다. 없으면 표시 이름 앞의 숫자만으로 후보를 좁힌다.
+    /// </remarks>
+    private StudentIdFormat? GuessIdFormat()
+    {
+        if (_roster is not null)
+        {
+            var full = _roster.Rows
+                .Where(r => r.Ok)
+                .Select(r => (r.StudentId, r.Grade, r.ClassNo, r.Number));
+
+            var guess = StudentIdFormats.Detect(full);
+            if (guess.Format is not null) return guess.Format;
+        }
+
+        var sids = _people
+            .Select(p => StudentName.Match(p.DisplayName.Trim()))
+            .Where(m => m.Success)
+            .Select(m => (m.Groups[1].Value, "", "", ""))
+            .Take(300)
+            .ToList();
+
+        return sids.Count == 0 ? null : StudentIdFormats.Detect(sids).Format;
+    }
+
+    /// <summary>
+    /// 아이디 → 그 사람이 속한 팀 이름들.
+    /// </summary>
+    /// <remarks>
+    /// 읽어 둔 것에서 뒤집어 만든다. <b>사람마다 물어볼 길이 없기 때문이다</b> —
+    /// 상주 세션이 내주는 것은 '팀 하나의 구성원' 뿐이라, 팀을 다 훑어야 사람 쪽이 채워진다.
+    /// 훑기 전에는 비어 있고, 화면이 그것을 '아직 안 읽음' 으로 말한다.
+    /// </remarks>
+    private Dictionary<string, List<string>> Membership()
+    {
+        var byId = _inventory
+            .Where(g => g.GroupId.Length > 0)
+            .GroupBy(g => g.GroupId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().DisplayName, StringComparer.OrdinalIgnoreCase);
+
+        var mine = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (groupId, members) in _members)
+        {
+            if (!byId.TryGetValue(groupId, out var name)) continue;
+
+            foreach (var m in members)
+            {
+                if (!mine.TryGetValue(m.Upn, out var list)) mine[m.Upn] = list = new List<string>();
+
+                // 소유자는 따로 표시한다 — 담임인지 아닌지가 여기서 드러난다.
+                list.Add(m.Role.Equals("Owner", StringComparison.OrdinalIgnoreCase) ? name + " (소유자)" : name);
+            }
+        }
+
+        foreach (var list in mine.Values) list.Sort(StringComparer.CurrentCulture);
+        return mine;
     }
 
     /// <summary>반별 현황. 구성원·소유자는 훑기(scan)를 한 뒤에야 채워진다.</summary>
@@ -544,20 +877,47 @@ public sealed class AdminApi
         }, ct));
     }
 
-    private object StartCreate(CancellationToken ct)
-        => Started(_jobs.Start("모자란 것 만들기", async (job, jct) =>
+    /// <summary>
+    /// 없는 것을 만든다.
+    /// </summary>
+    /// <param name="kind">
+    /// <c>team</c> 이면 팀만, <c>group</c> 이면 팀이 아닌 것만. 비어 있으면 둘 다.
+    /// 낱장이 팀과 그룹으로 갈려 있어, 누른 자리의 것만 만들어야 관리자가 짐작하지 않는다.
+    /// </param>
+    private object StartCreate(string kind, CancellationToken ct)
+        => Started(_jobs.Start(kind switch
+        {
+            "team" => "반 팀 만들기",
+            "group" => "그룹 만들기",
+            _ => "모자란 것 만들기",
+        }, async (job, jct) =>
         {
             var plan = TreeReconciler.Plan(Declared(), _inventory);
 
             var security = plan.Where(p => p.Action == PlanAction.Create && p.Declared.Kind == GroupKind.Security).ToList();
-            var toCreate = plan.Where(p => p.Action == PlanAction.Create && p.Declared.Kind != GroupKind.Security).ToList();
 
-            foreach (var s in security)
-                job.Warn($"보안 그룹 '{s.Declared.DisplayName}' 은 관리 센터에서 손으로 만들어 주세요.");
+            var toCreate = plan
+                .Where(p => p.Action == PlanAction.Create && p.Declared.Kind != GroupKind.Security)
+                .Where(p => kind switch
+                {
+                    "team" => p.Declared.Kind == GroupKind.Team,
+                    "group" => p.Declared.Kind != GroupKind.Team,
+                    _ => true,
+                })
+                .ToList();
+
+            // 보안 그룹 안내는 그룹 쪽에서만 낸다. 팀을 만드는데 그 이야기가 끼면 산만해진다.
+            if (kind != "team")
+                foreach (var s in security)
+                    job.Warn($"보안 그룹 '{s.Declared.DisplayName}' 은 관리 센터에서 손으로 만들어 주세요.");
 
             // 이미 있는 팀에도 선언한 채널이 다 있어야 한다. 만들 것이 없을 때도 반드시 돈다 —
             // 팀은 다 만들어졌는데 채널에서 끊긴 실행은 그때가 유일한 복구 지점이다.
-            await SyncChannelsAsync(job, plan.Where(p => p.Action == PlanAction.Skip), jct).ConfigureAwait(false);
+            //
+            // 다만 그룹만 만들 때는 건너뛴다. 채널 맞추기는 팀 로그인을 부르는데,
+            // 그룹 하나 만들자고 로그인 창을 띄우면 관리자는 무슨 일인지 알 수 없다.
+            if (kind != "group")
+                await SyncChannelsAsync(job, plan.Where(p => p.Action == PlanAction.Skip), jct).ConfigureAwait(false);
 
             if (toCreate.Count == 0) { job.Ok("만들 것이 없습니다. 선언한 대로 이미 다 있습니다."); job.Finish("만들 것이 없었습니다."); return; }
 
@@ -630,14 +990,21 @@ public sealed class AdminApi
         else job.Warn($"{d.DisplayName} 채널 — {res.Message}");
     }
 
-    /// <summary>반별 구성원·소유자를 한 바퀴 읽는다. 팀 수만큼 호출이라 시간이 걸린다.</summary>
+    /// <summary>
+    /// 누가 어느 팀에 있는지 한 바퀴 읽는다. 팀 수만큼 호출이라 시간이 걸린다.
+    /// </summary>
+    /// <remarks>
+    /// <b>선언에 있는 반 팀만이 아니라 테넌트의 팀 전부를 읽는다.</b> 사람 명부의
+    /// '속해 있는 그룹' 칸이 반 팀만 보여 주면, 교사가 다른 팀에 들어 있는 것이 안 보여
+    /// 아무 데도 안 속한 사람처럼 나온다.
+    /// </remarks>
     private object StartScan(CancellationToken ct)
-        => Started(_jobs.Start("반별 현황 읽기", async (job, jct) =>
+        => Started(_jobs.Start("누가 어느 팀에 있는지 읽기", async (job, jct) =>
         {
-            var plan = TreeReconciler.Plan(Declared(), _inventory);
-            var teams = plan.Where(p => p.Existing is { IsTeam: true, GroupId.Length: > 0 })
-                            .Select(p => (p.Declared.DisplayName, p.Existing!.GroupId))
-                            .Distinct().ToList();
+            var teams = _inventory
+                .Where(g => g.IsTeam && g.GroupId.Length > 0)
+                .Select(g => (g.DisplayName, g.GroupId))
+                .Distinct().ToList();
 
             if (teams.Count == 0) { job.Info("읽을 팀이 없습니다."); job.Finish("팀이 없습니다."); return; }
 
@@ -936,6 +1303,10 @@ internal static class Assets
         ".css" => "text/css; charset=utf-8",
         ".js" => "text/javascript; charset=utf-8",
         ".svg" => "image/svg+xml",
+
+        // 명단 양식. 파일에 BOM 이 들어 있어야 엑셀이 한글을 제대로 연다 —
+        // 없으면 CP949 로 읽어 이름이 통째로 깨진다.
+        ".csv" => "text/csv; charset=utf-8",
         _ => "application/octet-stream",
     };
 }

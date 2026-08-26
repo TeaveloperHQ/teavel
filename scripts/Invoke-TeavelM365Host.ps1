@@ -168,7 +168,11 @@ while ($true) {
         'Get-TeavelUserName', 'Set-TeavelDisplayName',
         'New-TeavelM365Group', 'Sync-TeavelTeamChannel',
         'Get-TeavelTeamMember', 'Add-TeavelTeamMember', 'Remove-TeavelTeamStudent',
-        'Rename-TeavelM365Group', 'Remove-TeavelM365Group'
+        'Rename-TeavelM365Group', 'Remove-TeavelM365Group',
+
+        # 비밀번호만 Graph 를 쓴다. 다른 것과 섞이지 않게 줄을 갈라 둔다.
+        'Get-TeavelGraphReadiness', 'Install-TeavelGraphModule',
+        'Connect-TeavelGraph', 'Reset-TeavelPassword'
     )
     if ($allowed -notcontains $fn) {
         Write-TeavelReply -Ok $false -Message "'$fn' 은(는) 여기서 실행할 수 없습니다."

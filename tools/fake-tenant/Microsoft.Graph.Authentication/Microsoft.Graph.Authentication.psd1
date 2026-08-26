@@ -1,0 +1,1 @@
+﻿@{ ModuleVersion='99.0.0'; RootModule='Microsoft.Graph.Authentication.psm1'; GUID='f0cfd10e-93ed-4503-b599-934ae5f6095e'; FunctionsToExport='*' }

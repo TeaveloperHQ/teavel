@@ -97,6 +97,31 @@ mv "$REAL" "$REAL.parked"
 mv "$REAL.parked" "$REAL"      # 반드시 되돌린다
 ```
 
+## 가짜 Graph — 비밀번호 때문에
+
+비밀번호 바꾸기는 Graph 가 필요한 유일한 자리다(Exchange·Teams 에는 cmdlet 이 없다).
+진짜 테넌트에 대고 남의 비밀번호를 바꿔 보며 시험할 수는 없으므로 여기도 가짜를 둔다.
+
+- `Microsoft.Graph.Authentication` — 연결과 권한 동의
+- `Microsoft.Graph.Users` — `Update-MgUser`
+
+**재현할 수 있어야 하는 갈래가 둘 있다.**
+
+| 무엇 | 어떻게 |
+|---|---|
+| 관리자가 동의 화면에서 [취소] | `TEAVEL_FAKE_GRAPH_DENY=1` |
+| 권한이 모자라 한 사람이 막힘 | 아이디에 `admin` 이 들어가면 거절한다 |
+
+둘째가 특히 중요하다 — 반 서른 명 중 하나가 막혔을 때 **스물아홉을 마저 하는지**가
+이 기능에서 가장 중요한 갈래다.
+
+가짜는 **진짜와 같은 모양**이어야 한다. `Update-MgUser` 를 `$ErrorAction`·`$Confirm` 을
+직접 선언한 함수로 만들었더니, `Invoke-TeavelWrite` 가 매개변수를 들여다보는 자리에서
+진짜에서는 안 나는 오류가 났다. 진짜는 `[CmdletBinding(SupportsShouldProcess)]` 다.
+
+바뀐 비밀번호는 **파일에 남기지 않는다.** 가짜라도 비밀번호를 디스크에 적어 두는 버릇을
+들이면 진짜에서도 그렇게 된다. 누구를 언제 바꿨는지만 남긴다.
+
 ## 채워 넣은 것
 
 실제 학교 테넌트에서 본 목록 그대로다. 지어낸 이름으로는 위의 둘이 안 나왔다 —
