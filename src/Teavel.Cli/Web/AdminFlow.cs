@@ -72,26 +72,42 @@ public sealed class AdminFlow
         await using var server = new LocalServer((ask, c) =>
             api is null ? Task.FromResult(HttpSay.Text(503, "아직 준비 중입니다.")) : api.HandleAsync(ask, c));
 
-        M365Host host;
-        try
+        // 상주 세션이 흘려보내는 문구를 콘솔과 화면 둘 다에 적는다.
+        // 브라우저만 보고 있는 관리자에게 로그인 안내가 닿아야 한다.
+        void Sink(string line)
         {
-            // 상주 세션이 흘려보내는 문구를 콘솔과 화면 둘 다에 적는다.
-            // 브라우저만 보고 있는 관리자에게 로그인 안내가 닿아야 한다.
-            host = await M365Host.StartAsync(shell, _tools.ScriptsDirectory, line =>
-            {
-                Ui.Plain(line);
-                api?.Note(line);
-            }, ct).ConfigureAwait(false);
+            Ui.Plain(line);
+            api?.Note(line);
         }
+
+        M365Host host;
+        try { host = await M365Host.StartAsync(shell, _tools.ScriptsDirectory, Sink, ct).ConfigureAwait(false); }
         catch (Exception ex) { Ui.Error(ex.Message); return 2; }
 
-        await using (host)
+        // 상주 세션은 판 중간에 갈릴 수 있다(모듈을 깐 뒤 새로 띄운다).
+        // using 으로 묶으면 처음 것만 붙잡혀 새 세션이 닫히지 않는다.
+        try
         {
             api = new AdminApi(host, tree, server.Token);
 
             // 모듈 설치는 흐름 쪽 것을 그대로 쓴다. 여기서 '모자라니 teavel m365 를
             // 실행하세요' 라고 하면, 그 명령도 이 화면으로 오므로 제자리를 돈다.
-            if (!await M365Flow.EnsureModulesAsync(host, assumeYes: false, ct).ConfigureAwait(false)) return 2;
+            var check = await M365Flow.EnsureModulesAsync(host, assumeYes: false, ct).ConfigureAwait(false);
+            if (check == M365Flow.ModuleCheck.Failed) return 2;
+
+            if (check == M365Flow.ModuleCheck.Restart)
+            {
+                await host.DisposeAsync().ConfigureAwait(false);
+
+                try { host = await M365Host.StartAsync(shell, _tools.ScriptsDirectory, Sink, ct).ConfigureAwait(false); }
+                catch (Exception ex) { Ui.Error(ex.Message); return 2; }
+
+                // 화면이 옛 세션을 들고 있으면 첫 명령부터 '끊어졌습니다' 가 된다.
+                api = new AdminApi(host, tree, server.Token);
+
+                if (!await M365Flow.ConfirmModulesAsync(host, ct).ConfigureAwait(false)) return 2;
+            }
+
             if (!await ConnectAsync(host, ct).ConfigureAwait(false)) return 2;
 
             Ui.Title("학교를 읽는 중");
@@ -114,6 +130,10 @@ public sealed class AdminFlow
             Console.WriteLine();
             Ui.Ok("관리 화면을 닫았습니다.");
             return 0;
+        }
+        finally
+        {
+            await host.DisposeAsync().ConfigureAwait(false);
         }
     }
 

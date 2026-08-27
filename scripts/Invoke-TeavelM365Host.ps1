@@ -129,6 +129,13 @@ function Write-TeavelReply {
 try {
     Import-Module (Join-Path $ScriptsDirectory 'Teavel.Common.psm1') -Force -ErrorAction Stop
     Import-Module (Join-Path $ScriptsDirectory 'Teavel.M365.psm1')   -Force -ErrorAction Stop
+
+    # 우리가 받아 둔 모듈 폴더를 이 세션에 알려 준다.
+    #
+    # PowerShell 은 이 폴더를 기본으로 보지 않는다. 예전에는 설치를 돌린 그 세션에서만
+    # 붙여 줬는데, 모듈을 깐 뒤 세션을 새로 띄우면 방금 깐 것을 못 찾았다 —
+    # '설치했는데도 아직 모자랍니다' 가 그것이다(2026-08-27).
+    Add-TeavelModulePath
 }
 catch {
     Write-TeavelReply -Ok $false -Message "M365 기능을 불러오지 못했습니다: $($_.Exception.Message)"

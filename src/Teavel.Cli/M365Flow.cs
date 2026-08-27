@@ -56,10 +56,38 @@ public sealed class M365Flow
             return 2;
         }
 
-        await using var host = await StartHostAsync(shell, ct).ConfigureAwait(false);
+        var host = await StartHostAsync(shell, ct).ConfigureAwait(false);
         if (host is null) return 2;
 
-        if (!await EnsureModulesAsync(host, _assumeYes, ct).ConfigureAwait(false)) return 2;
+        // 상주 세션은 판 중간에 갈릴 수 있다(모듈을 깐 뒤 새로 띄운다).
+        // using 으로 묶으면 처음 것만 붙잡혀 새 세션이 닫히지 않는다.
+        try
+        {
+            var check = await EnsureModulesAsync(host, _assumeYes, ct).ConfigureAwait(false);
+            if (check == ModuleCheck.Failed) return 2;
+
+            if (check == ModuleCheck.Restart)
+            {
+                await host.DisposeAsync().ConfigureAwait(false);
+
+                var fresh = await StartHostAsync(shell, ct).ConfigureAwait(false);
+                if (fresh is null) return 2;
+
+                host = fresh;
+                if (!await ConfirmModulesAsync(host, ct).ConfigureAwait(false)) return 2;
+            }
+
+            return await RunWithHostAsync(host, tree, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            await host.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>세션이 갖춰진 뒤의 본 흐름.</summary>
+    private async Task<int> RunWithHostAsync(M365Host host, SchoolTree tree, CancellationToken ct)
+    {
         if (!await ConnectAsync(host, tree, ct).ConfigureAwait(false)) return 2;
 
         var inventory = await ReadInventoryAsync(host, ct).ConfigureAwait(false);
@@ -109,7 +137,38 @@ public sealed class M365Flow
         }
     }
 
-    internal static async Task<bool> EnsureModulesAsync(M365Host host, bool assumeYes, CancellationToken ct)
+    /// <summary>준비 확인의 결과.</summary>
+    internal enum ModuleCheck
+    {
+        /// <summary>그대로 이어 가면 된다.</summary>
+        Ready,
+
+        /// <summary>갖췄지만 <b>상주 세션을 새로 띄워야</b> 한다.</summary>
+        Restart,
+
+        /// <summary>더 갈 수 없다.</summary>
+        Failed,
+    }
+
+    /// <summary>
+    /// 모듈을 갖춘다.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>답이 온 것과 답이 좋은 것은 다르다.</b> 예전에는 <c>Ok</c> 를 안 보고 문구에
+    /// '손봐야' 가 들어 있는지만 봤다. 그런데 상주 세션이 죽으면 문구가
+    /// <i>'M365 세션이 끊어졌습니다'</i> 라서 그 검사를 그냥 지나가고,
+    /// <b>아무것도 못 했는데 '준비됐습니다' 가 찍혔다.</b> 실기에서 그랬다(2026-08-27) —
+    /// 관리자가 본 것은 설치 결과 한 줄 없이 뜬 ✓ 와, 그다음 자리의 뜬금없는 실패였다.
+    /// </para>
+    /// <para>
+    /// 그리고 설치한 뒤에는 <b>세션을 새로 띄운다.</b> 설치 자신이 그렇게 말한다 —
+    /// <i>'PowerShell 창을 새로 열면 확실히 반영됩니다'</i>, PackageManagement 도
+    /// <i>'응용 프로그램을 닫은 후 작업을 다시 시도하세요'</i> 라고 경고한다.
+    /// 방금 깐 모듈을 그 자리에서 올리려다 세션이 통째로 죽는 것보다, 한 번 새로 띄우는 편이 싸다.
+    /// </para>
+    /// </remarks>
+    internal static async Task<ModuleCheck> EnsureModulesAsync(M365Host host, bool assumeYes, CancellationToken ct)
     {
         Ui.Title("① 준비 확인");
 
@@ -119,8 +178,8 @@ public sealed class M365Flow
 
         // 준비확인은 모자랄 때도 ok=true 로 돌아온다(그건 실패가 아니라 사실 보고다).
         // 무엇이 모자란지는 문구로 판단하지 않고, 설치를 돌린 뒤 다시 확인해서 가른다.
-        if (!ready.Ok) { Ui.Error(ready.Message); return false; }
-        if (!ready.Message.Contains("손봐야", StringComparison.Ordinal)) return true;
+        if (!ready.Ok) { Ui.Error(ready.Message); Ui.Details(ready.Details); return ModuleCheck.Failed; }
+        if (!ready.Message.Contains("손봐야", StringComparison.Ordinal)) return ModuleCheck.Ready;
 
         Console.WriteLine();
         Ui.Dim("      모자란 것은 Teavel 이 대신 설치합니다.");
@@ -128,17 +187,35 @@ public sealed class M365Flow
         if (!assumeYes && !Ui.Confirm("      지금 설치할까요?"))
         {
             Ui.Info("여기까지 하겠습니다. 모듈이 없으면 다음 단계로 갈 수 없습니다.");
-            return false;
+            return ModuleCheck.Failed;
         }
 
         Console.WriteLine();
         Ui.Dim("      내려받는 중입니다. 몇 분 걸릴 수 있습니다.");
         var install = await host.CallAsync("Install-TeavelM365Module",
             timeout: TimeSpan.FromMinutes(15), ct: ct).ConfigureAwait(false);
+
         Ui.Details(install.Details);
 
+        if (!install.Ok)
+        {
+            Ui.Error(install.Message);
+            Ui.Details(install.Details);
+            return ModuleCheck.Failed;
+        }
+
+        Ui.Ok("내려받았습니다. 이제 PowerShell 을 새로 띄워 확인합니다.");
+        return ModuleCheck.Restart;
+    }
+
+    /// <summary>
+    /// 새로 띄운 세션에서 다시 확인한다. 여기서 통과해야 진짜로 갖춰진 것이다.
+    /// </summary>
+    internal static async Task<bool> ConfirmModulesAsync(M365Host host, CancellationToken ct)
+    {
         var again = await host.CallAsync("Get-TeavelM365Readiness", ct: ct).ConfigureAwait(false);
-        if (again.Message.Contains("손봐야", StringComparison.Ordinal))
+
+        if (!again.Ok || again.Message.Contains("손봐야", StringComparison.Ordinal))
         {
             Ui.Error("설치했는데도 아직 모자랍니다.");
             Ui.Details(again.Details);
@@ -146,6 +223,7 @@ public sealed class M365Flow
         }
 
         Ui.Ok("준비됐습니다.");
+        Ui.Details(again.Details);
         return true;
     }
 

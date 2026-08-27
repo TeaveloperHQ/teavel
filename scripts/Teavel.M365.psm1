@@ -85,6 +85,33 @@ function Test-TeavelUnderOneDrive {
     그래서 $env:PSModulePath 를 읽되 OneDrive 아래는 피하고, 마땅한 곳이 없으면
     %LOCALAPPDATA% 에 우리 폴더를 만들어 쓴다.
 #>
+<#
+    우리가 받아 둔 모듈 폴더를 이 세션에 알려 준다.
+
+    PowerShell 은 이 폴더를 기본으로 보지 않는다. 예전에는 설치를 돌린 그 세션에서만
+    붙여 줬는데, <b>모듈을 깐 뒤 세션을 새로 띄우면 방금 깐 것을 못 찾았다.</b>
+    '설치했는데도 아직 모자랍니다' 가 그것이다(2026-08-27).
+
+    그래서 켤 때마다 한 번 붙인다. 이 프로세스에만 걸리고 교사 PC 의 설정은 건드리지 않는다.
+
+    <b>맨 뒤에 붙인다.</b> Import-Module 은 판 번호가 아니라 PSModulePath 차례로 고르므로,
+    앞에 끼우면 누가 일부러 앞세워 둔 것을 밀어낸다. 가짜 테넌트가 그렇게 밀려나
+    진짜 모듈이 올라오고 로그인에서 멈춘 적이 있다(2026-08-27).
+#>
+function Add-TeavelModulePath {
+    param()
+
+    $ours = $null
+    try {
+        if ($env:LOCALAPPDATA) { $ours = Join-Path $env:LOCALAPPDATA 'Teaveloper\Modules' }
+    } catch { }
+
+    if (-not $ours) { return }
+    if ($env:PSModulePath -and (@($env:PSModulePath -split [IO.Path]::PathSeparator) -contains $ours)) { return }
+
+    $env:PSModulePath = $env:PSModulePath + [IO.Path]::PathSeparator + $ours
+}
+
 function Get-TeavelModuleDirectory {
     param()
 
@@ -221,9 +248,11 @@ function Install-TeavelModuleFromGallery {
         [IO.Compression.ZipFile]::ExtractToDirectory($tmp, $target)
 
         # nupkg 부산물은 모듈 폴더에 있으면 지저분하다.
+        # 대괄호는 경로에서 와일드카드다. '[Content_Types].xml' 을 그냥 넘기면
+        # 글자 묶음으로 읽혀 아무것도 안 지워진다 — -LiteralPath 라야 한다.
         foreach ($junk in '_rels', 'package', '[Content_Types].xml', "$Name.nuspec") {
             $p = Join-Path $target $junk
-            if (Test-Path $p) { Remove-Item $p -Recurse -Force }
+            if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force }
         }
 
         # 인터넷에서 받은 표시(MOTW)가 붙어 있으면 DLL 로드가 막힌다.
@@ -297,11 +326,22 @@ function Install-TeavelM365Module {
             #
             # 그래서 기본 자리가 OneDrive 아래면 Install-Module 을 쓰지 않고
             # 우리가 고른 폴더로 직접 받는다.
+            #
+            # 그 '기본 자리' 는 <b>'문서' 폴더 아래</b>다 — Install-Module -Scope CurrentUser 가
+            # 거기 깔기 때문이다. 문서 폴더가 OneDrive 로 옮겨져 있으면 모듈도 거기로 간다.
+            #
+            # 예전에는 PSModulePath 에서 '내 계정' 으로 보이는 첫 항목을 보고 판단했는데,
+            # 우리가 넣어 둔 Teaveloper\Modules 가 그 조건에 먼저 걸려 <b>이 검사가 늘 거짓</b>이
+            # 됐다. 그래서 모듈이 OneDrive 아래로 깔렸고, 파일 온디맨드가 DLL 을 자리표시자로
+            # 만들어 상주 세션이 통째로 죽었다. 실기에서 그랬다(2026-08-27).
+            #
+            # 차례에 기대지 않고 문서 폴더를 직접 묻는다.
             $defaultsToOneDrive = $false
             try {
-                $userScope = @($env:PSModulePath -split [IO.Path]::PathSeparator |
-                               Where-Object { $_ -like "*\Users\$env:USERNAME\*" } | Select-Object -First 1)
-                $defaultsToOneDrive = ($userScope -and (Test-TeavelUnderOneDrive $userScope[0]))
+                $docs = [Environment]::GetFolderPath('MyDocuments')
+                if ($docs) {
+                    $defaultsToOneDrive = Test-TeavelUnderOneDrive (Join-Path $docs 'WindowsPowerShell\Modules')
+                }
             } catch { }
 
             $ok = $false
@@ -325,7 +365,7 @@ function Install-TeavelM365Module {
                     $latest = (Find-Module -Name $spec.Name -ErrorAction Stop |
                                Sort-Object Version -Descending | Select-Object -First 1).Version.ToString()
                     Install-TeavelModuleFromGallery -Name $spec.Name -Version $latest -Directory $dir
-                    if ($env:PSModulePath -notlike "*$dir*") { $env:PSModulePath = "$dir;$env:PSModulePath" }
+                    Add-TeavelModulePath
                     $done.Add("$($spec.Name) $latest 설치 완료 ($dir)")
                 } catch {
                     $failed.Add("$($spec.Name) — $($_.Exception.Message)")
@@ -1493,7 +1533,7 @@ function Set-TeavelAccountBlocked {
 
 Export-ModuleMember -Function `
     Test-TeavelUnderOneDrive, Get-TeavelStudentId, Get-TeavelCohort, `
-    Get-TeavelModuleDirectory, Get-TeavelM365Readiness, Install-TeavelM365Module, `
+    Get-TeavelModuleDirectory, Add-TeavelModulePath, Get-TeavelM365Readiness, Install-TeavelM365Module, `
     Install-TeavelModuleFromGallery, Connect-TeavelM365, Invoke-TeavelWrite, `
     Connect-TeavelTeamsByCode, `
     Get-TeavelM365Inventory, Get-TeavelTenantUser, `
