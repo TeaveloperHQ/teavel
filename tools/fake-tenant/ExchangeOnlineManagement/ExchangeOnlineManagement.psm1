@@ -175,6 +175,7 @@ function Remove-UnifiedGroup {
     가짜 Get-User / Set-User. 교육청 포털이 만든 계정처럼 성과 이름이 나뉘어 있다.
 #>
 $script:People = @{}
+$script:Blocked = @{}
 function Get-User {
     param($Identity, $ResultSize, $ErrorAction)
     if ($script:People.Count -eq 0) {
@@ -196,7 +197,16 @@ function Get-User {
             FirstName = '민준'; LastName = '최' }
     }
     if ($Identity) {
-        if (-not $script:People.ContainsKey($Identity)) { throw "그런 사람이 없습니다: $Identity" }
+        # 진짜 테넌트에서는 Get-CsOnlineUser 가 준 사람이면 Exchange 에도 다 있다.
+        # 여기 씨앗은 이름 붙이기 시험용 몇 명뿐이라, 나머지는 물어볼 때 만들어 준다 —
+        # 그러지 않으면 학생을 막아 보는 시험이 '그런 사람이 없습니다' 로만 끝난다.
+        if (-not $script:People.ContainsKey($Identity)) {
+            if ($Identity -notlike '*@*') { throw "그런 사람이 없습니다: $Identity" }
+            $script:People[$Identity] = [pscustomobject]@{
+                UserPrincipalName = $Identity; DisplayName = $Identity
+                FirstName = ''; LastName = ''
+            }
+        }
         return $script:People[$Identity]
     }
     @($script:People.Values)
@@ -207,12 +217,24 @@ function Get-User {
 #>
 function Set-User {
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
-    param($Identity, $DisplayName)
-    if (-not $script:People.ContainsKey($Identity)) { throw "그런 사람이 없습니다: $Identity" }
+    param($Identity, $DisplayName, $AccountDisabled)
+    if (-not $script:People.ContainsKey($Identity)) { $null = Get-User -Identity $Identity }
     if ($PSCmdlet.ShouldProcess($Identity, '설정')) {
-        $script:People[$Identity].DisplayName = $DisplayName
+        if ($PSBoundParameters.ContainsKey('DisplayName'))     { $script:People[$Identity].DisplayName = $DisplayName }
+        if ($PSBoundParameters.ContainsKey('AccountDisabled')) { $script:Blocked[$Identity] = [bool]$AccountDisabled }
     }
 }
+
+<#
+    누가 로그인해 있는지. 진짜 EXO v3 가 이 이름으로 준다.
+    자기 자신을 차단하려는 것을 여기서 막는다 — 막으면 되돌릴 사람이 없어진다.
+#>
+function Get-ConnectionInformation {
+    param($ErrorAction)
+    [pscustomobject]@{ UserPrincipalName = 'admin@school.example.kr'; State = 'Connected' }
+}
+
+function Get-TeavelFakeBlocked { param() $script:Blocked }
 
 function Add-UnifiedGroupLinks { param($Identity, $LinkType, $Links, $ErrorAction) }
 
@@ -245,4 +267,5 @@ function Set-FakeTeamFlag {
 
 Export-ModuleMember -Function Connect-ExchangeOnline, Disconnect-ExchangeOnline,
     Get-UnifiedGroup, New-UnifiedGroup, Set-UnifiedGroup, Remove-UnifiedGroup,
-    Add-UnifiedGroupLinks, Set-FakeTeamFlag, Set-FakeMemberCount, Get-FakeGroupId, Get-User, Set-User
+    Add-UnifiedGroupLinks, Set-FakeTeamFlag, Set-FakeMemberCount, Get-FakeGroupId, Get-User, Set-User,
+    Get-ConnectionInformation, Get-TeavelFakeBlocked

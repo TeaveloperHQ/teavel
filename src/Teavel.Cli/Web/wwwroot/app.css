@@ -433,3 +433,8 @@ code {
 #veil p { margin: 0 0 12px; color: var(--ink-2); }
 #veil input[type=text] { width: 100%; }
 #veil .acts { display: flex; gap: 8px; margin-top: 20px; }
+
+/* 패널 안의 입력 이름표. 무엇을 적는 칸인지가 칸 위에 있어야 한다. */
+.lbl { display: block; font-weight: 600; font-size: 13px; margin: 0 0 4px; }
+#veil input[type=text], #veil select { width: 100%; }
+#veil .sub { margin-top: 4px; }

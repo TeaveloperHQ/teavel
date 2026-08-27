@@ -172,7 +172,8 @@ while ($true) {
 
         # 비밀번호만 Graph 를 쓴다. 다른 것과 섞이지 않게 줄을 갈라 둔다.
         'Get-TeavelGraphReadiness', 'Install-TeavelGraphModule',
-        'Connect-TeavelGraph', 'Reset-TeavelPassword'
+        'Connect-TeavelGraph', 'Reset-TeavelPassword',
+        'Set-TeavelAccountBlocked'
     )
     if ($allowed -notcontains $fn) {
         Write-TeavelReply -Ok $false -Message "'$fn' 은(는) 여기서 실행할 수 없습니다."

@@ -72,13 +72,26 @@ $script:FacultyPlan = @('EXCHANGE_S_STANDARD', 'MCOSTANDARD', 'SHAREPOINTSTANDAR
                         'TEAMS1', 'SCHOOL_DATA_SYNC_P1', 'INTUNE_EDU')
 $script:StudentPlan = @('EXCHANGE_S_STANDARD', 'MCOSTANDARD', 'SHAREPOINTSTANDARD_EDU', 'TEAMS1')
 
+<# 가짜 Exchange 가 막아 둔 사람인지. 모듈이 아직 안 올라왔으면 안 막힌 것으로 본다. #>
+function Test-FakeBlocked {
+    param([string] $Upn)
+    try {
+        $log = Get-TeavelFakeBlocked
+        return ($log -and $log.ContainsKey($Upn) -and $log[$Upn])
+    } catch { return $false }
+}
+
 function New-FakePerson {
-    param($Upn, $Name, $Dept, $Kind, $Plans)
+    param($Upn, $Name, $Dept, $Kind, $Plans, $Made = '2024-03-02')
     [pscustomobject]@{
         UserPrincipalName = $Upn
         DisplayName       = $Name
         Department        = $Dept
         AccountType       = $Kind
+        # 진짜 Get-CsOnlineUser 도 이 이름으로 준다. 졸업생을 가려내는 데 쓰인다.
+        WhenCreated       = [datetime]$Made
+        # 차단되면 $false 가 된다. 가짜 Exchange 의 Set-User 가 적어 둔 것을 본다.
+        AccountEnabled    = -not (Test-FakeBlocked $Upn)
         AssignedPlan      = @($Plans | ForEach-Object {
             [pscustomobject]@{ Capability = $_; CapabilityStatus = 'Enabled' }
         })
@@ -108,16 +121,20 @@ function Get-CsOnlineUser {
                 # 실제 학교의 학생 표시 이름은 학번+이름이다(10101홍길동).
                 $family = @('김','이','박','최','정','강','조','윤','장','임')[($no - 1) % 10]
                 $given  = @('민준','서연','도윤','하은','시우','지아','예준','수아','건우','채원')[($room - 1) % 10]
+                # 학년마다 들어온 해가 다르다. 3학년이 가장 오래됐다 —
+                # 만든 날로 줄을 세우면 졸업이 가까운 아이들이 위로 올라온다.
+                $year = 2026 - (4 - $grade)
                 $people.Add((New-FakePerson -Upn "s$sid@school.example.kr" `
-                    -Name "$sid$family$given" -Dept '' -Kind 'User' -Plans $script:StudentPlan))
+                    -Name "$sid$family$given" -Dept '' -Kind 'User' -Plans $script:StudentPlan `
+                    -Made "$year-03-02"))
             }
         }
     }
 
     # 라이선스 없는 계정 · 손님 · 자원 계정 — 실제 테넌트에 늘 섞여 있다.
-    $people.Add((New-FakePerson -Upn 'old.teacher@school.example.kr' -Name '퇴직교사' -Dept '' -Kind 'IneligibleUser' -Plans @()))
-    $people.Add((New-FakePerson -Upn 'guest@other.example.com' -Name '외부 강사' -Dept '' -Kind 'Guest' -Plans @()))
-    $people.Add((New-FakePerson -Upn 'room1@school.example.kr' -Name '회의실1' -Dept '' -Kind 'ResourceAccount' -Plans @()))
+    $people.Add((New-FakePerson -Upn 'old.teacher@school.example.kr' -Name '퇴직교사' -Dept '' -Kind 'IneligibleUser' -Plans @() -Made '2019-03-04'))
+    $people.Add((New-FakePerson -Upn 'guest@other.example.com' -Name '외부 강사' -Dept '' -Kind 'Guest' -Plans @() -Made '2025-09-01'))
+    $people.Add((New-FakePerson -Upn 'room1@school.example.kr' -Name '회의실1' -Dept '' -Kind 'ResourceAccount' -Plans @() -Made '2023-03-01'))
 
     if ($Identity) { return @($people | Where-Object { $_.UserPrincipalName -eq $Identity }) }
     $people.ToArray()

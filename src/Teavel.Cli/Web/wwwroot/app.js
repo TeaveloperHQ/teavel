@@ -472,7 +472,10 @@ PAGES['구성원'] = async () => {
 
     <div class="commands">
       <button class="cmd" id="bulk"><span class="i">&#xE710;</span> 명단으로 학생 넣기</button>
+      <button class="cmd" id="assign"><span class="i">&#xE902;</span> 그룹에 넣기</button>
       <button class="cmd" id="pw"><span class="i">&#xE192;</span> 비밀번호 재설정</button>
+      <button class="cmd bad" id="block"><span class="i">&#xE72E;</span> 차단</button>
+      <button class="cmd" id="unblock"><span class="i">&#xE785;</span> 차단 풀기</button>
       <span class="grow"></span>
       <input type="search" id="q" placeholder="이름 · 아이디로 찾기" style="width:230px">
       <span class="sub" id="count"></span>
@@ -486,6 +489,7 @@ PAGES['구성원'] = async () => {
           <th class="sortable" data-sort="upn">ID <span class="arrow" data-arrow="upn"></span></th>
           <th class="sortable" data-sort="license">라이선스 <span class="arrow" data-arrow="license"></span></th>
           <th class="sortable" data-sort="groupText">속해 있는 그룹 <span class="arrow" data-arrow="groupText"></span></th>
+          <th class="sortable" data-sort="created">계정 만든 날 <span class="arrow" data-arrow="created"></span></th>
           <th></th>
         </tr></thead>
         <tbody id="rows"></tbody>
@@ -496,10 +500,13 @@ PAGES['구성원'] = async () => {
   $('#q').oninput = paint;
 
   // 지금 왼쪽 나무에서 고른 가지가 그대로 대상이 된다 —
-  // '3학년 2반' 을 열어 두고 누르면 그 반이고, '전체' 면 전체다.
-  $('#pw').onclick = () => openPassword(
-    state.people.filter(r => inBranch(r, state.pick)),
-    treeLabel(tree, state.pick));
+  // '1학년' 을 열어 두고 누르면 1학년 전체고, '3학년 2반' 이면 그 반이다.
+  const branch = () => state.people.filter(r => inBranch(r, state.pick));
+
+  $('#pw').onclick = () => openPassword(branch(), treeLabel(tree, state.pick));
+  $('#assign').onclick = () => openAssign(branch(), treeLabel(tree, state.pick));
+  $('#block').onclick = () => openBlock(branch(), treeLabel(tree, state.pick), true);
+  $('#unblock').onclick = () => openBlock(branch(), treeLabel(tree, state.pick), false);
 
   const scan = $('#scan');
   if (scan) scan.onclick = async () => run(await api('/api/classes/scan', {}), draw);
@@ -538,10 +545,23 @@ PAGES['구성원'] = async () => {
     const branch = state.people.filter(r => inBranch(r, state.pick));
     const rows = branch.filter(r => !q || r.name.includes(q) || r.upn.includes(q));
 
-    // 그룹 칸은 글자가 아니라 개수로 줄을 세운다 — '많이 속한 사람' 을 보려는 칸이다.
-    rows.sort((a, b) => dir * (key === 'groupText'
-      ? (a.groups.length - b.groups.length) || a.name.localeCompare(b.name, 'ko')
-      : String(a[key] || '').localeCompare(String(b[key] || ''), 'ko')));
+    rows.sort((a, b) => {
+      // 그룹 칸은 글자가 아니라 개수로 줄을 세운다 — '많이 속한 사람' 을 보려는 칸이다.
+      if (key === 'groupText')
+        return dir * ((a.groups.length - b.groups.length) || a.name.localeCompare(b.name, 'ko'));
+
+      const x = String(a[key] || '');
+      const y = String(b[key] || '');
+
+      // 모르는 날은 어느 쪽으로 세우든 늘 아래로 보낸다. 오래된 계정을 찾으려고
+      // 세우는 칸인데 빈 값이 맨 위를 차지하면 그 칸이 뜻을 잃는다.
+      if (key === 'created' && (!x || !y)) {
+        if (!x && !y) return 0;
+        return x ? -1 : 1;
+      }
+
+      return dir * x.localeCompare(y, 'ko');
+    });
 
     $$('[data-arrow]').forEach(s => {
       s.textContent = s.dataset.arrow === key ? (dir > 0 ? '▲' : '▼') : '';
@@ -551,11 +571,12 @@ PAGES['구성원'] = async () => {
       + (rows.length !== state.people.length ? ` (전체 ${state.people.length}명)` : '');
 
     $('#rows').innerHTML = rows.length === 0
-      ? `<tr><td colspan="5" class="sub">여기에 든 사람이 없습니다.</td></tr>`
+      ? `<tr><td colspan="6" class="sub">여기에 든 사람이 없습니다.</td></tr>`
       : rows.slice(0, 500).map(r => `
         <tr class="${r.licensed ? '' : 'dim'}">
           <td class="name">${esc(r.name) || '<span class="pill stop">비어 있음</span>'}
-              ${r.outsider ? '<span class="pill sys">학교 밖</span>' : ''}</td>
+              ${r.outsider ? '<span class="pill sys">학교 밖</span>' : ''}
+              ${r.blocked === '1' ? '<span class="pill stop">차단됨</span>' : ''}</td>
           <td class="sub">${esc(r.upn)}</td>
           <td class="tight">
             <span class="pill ${r.license === '교사' ? 'use' : r.license === '학생' ? 'new'
@@ -565,9 +586,10 @@ PAGES['구성원'] = async () => {
           <td>${r.groups.length
               ? r.groups.map(g => `<span class="pill sys" style="margin:1px">${esc(g)}</span>`).join(' ')
               : `<span class="sub">${p.scanned ? '없음' : '아직 안 읽음'}</span>`}</td>
+          <td class="tight sub">${esc(r.created) || '모름'}</td>
           <td class="tight"><button class="tiny" data-upn="${esc(r.upn)}"><span class="i"></span> 이름 바꾸기</button></td>
         </tr>`).join('')
-        + (rows.length > 500 ? `<tr><td colspan="5" class="sub">앞의 500명만 보여 드립니다. 왼쪽에서 반을 골라 주세요.</td></tr>` : '');
+        + (rows.length > 500 ? `<tr><td colspan="6" class="sub">앞의 500명만 보여 드립니다. 왼쪽에서 반을 골라 주세요.</td></tr>` : '');
 
     $$('#rows button[data-upn]').forEach(b => b.onclick = async () => {
       const who = state.people.find(x => x.upn === b.dataset.upn);
@@ -594,6 +616,154 @@ function treeLabel(nodes, pick) {
     if (deep) return n.id === 'all' ? deep : `${n.label} ${deep}`;
   }
   return '';
+}
+
+/**
+ * 고른 사람들을 그룹 하나에 넣는다.
+ *
+ * 나무에서 <b>'1학년'</b> 을 고르고 이것을 누르면 1학년 예순 명이 한 번에 간다.
+ * 넣을 팀은 <b>이미 있는 것 중에서 고른다</b> — 새로 만드는 것은 팀 화면의 일이다.
+ */
+async function openAssign(people, where) {
+  const targets = people.filter(r => r.licensed);
+  const g = await api('/api/groups');
+  const teams = g.rows.filter(r => r.isTeam && r.groupId);
+
+  veil(`
+    <h3>그룹에 넣기</h3>
+    <p><b>${esc(where || '고른 사람')}</b> — ${targets.length}명</p>
+
+    ${targets.length === 0 ? `<div class="card warn">
+      <b>넣을 수 있는 사람이 없습니다.</b>
+      <div class="sub">라이선스가 없는 계정은 팀에 넣어도 들어오지 못합니다.</div>
+    </div>` : ''}
+
+    ${teams.length === 0 ? `<div class="card warn">
+      <b>넣을 팀이 없습니다.</b>
+      <div class="sub">팀 화면에서 먼저 만들어 주세요.</div>
+    </div>` : `
+    <label class="lbl">어느 팀에 넣을까요?</label>
+    <select id="as-team" style="width:100%">
+      ${teams.map(t => `<option value="${esc(t.groupId)}">${esc(t.name)}${t.members >= 0 ? ` — ${t.members}명` : ''}</option>`).join('')}
+    </select>
+
+    <label class="lbl" style="margin-top:14px">무엇으로 넣을까요?</label>
+    <select id="as-role" style="width:100%">
+      <option value="Member">구성원 — 보통 이것입니다</option>
+      <option value="Owner">소유자 — 팀 설정을 바꾸고 과제를 낼 수 있습니다</option>
+    </select>
+
+    <div class="card" style="margin-top:14px">
+      <b>이미 들어 있는 사람은 건너뜁니다.</b>
+      <div class="sub">여러 번 누르셔도 안전합니다. 팀을 만들려면 <b>로그인이 한 번 더</b> 필요합니다.</div>
+    </div>`}
+
+    <details class="tell">
+      <summary>누가 들어가는지 보기 (${targets.length}명)</summary>
+      <div class="body">
+        ${targets.slice(0, 300).map(r => `<span class="pill sys" style="margin:1px">${esc(r.name || r.upn)}</span>`).join(' ')}
+        ${targets.length > 300 ? `<div class="sub" style="margin-top:8px">…그 밖에 ${targets.length - 300}명 더</div>` : ''}
+      </div>
+    </details>
+
+    <div class="acts">
+      <button id="as-no">그만두기</button>
+      <button id="as-go" class="go" ${targets.length && teams.length ? '' : 'disabled'}>${targets.length}명 넣기</button>
+    </div>`,
+
+  (el, shut) => {
+    $('#as-no', el).onclick = shut;
+
+    const go = $('#as-go', el);
+    if (go.disabled) return;
+
+    go.onclick = async () => {
+      const groupId = $('#as-team', el).value;
+      const role = $('#as-role', el).value;
+      const team = teams.find(t => t.groupId === groupId);
+      shut();
+
+      run(await api('/api/members/assign', {
+        groupId, role,
+        upns: targets.map(r => r.upn),
+        label: `${where || ''} ${targets.length}명 → ${team ? team.name : ''}`,
+      }), draw);
+    };
+  });
+}
+
+/**
+ * 계정 막기 · 풀기.
+ *
+ * <b>졸업생 정리는 지우는 것이 아니라 막는 것이다.</b> 지우면 그 아이의 과제·파일·대화가
+ * 함께 사라지고 되돌릴 수 없다. 막아 두면 로그인만 안 될 뿐 자료는 그대로 있다.
+ *
+ * 그래서 이 창은 <b>겁을 주지 않는다.</b> 되돌릴 수 있는 일에 지우기 같은 문을 달면
+ * 관리자는 정작 되돌릴 수 없는 일 앞에서도 같은 무게로 읽는다.
+ */
+function openBlock(people, where, blocked) {
+  const targets = blocked
+    ? people.filter(r => r.blocked !== '1')
+    : people.filter(r => r.blocked === '1');
+
+  const what = blocked ? '차단' : '차단 풀기';
+  const already = people.length - targets.length;
+
+  veil(`
+    <h3>${esc(what)}</h3>
+    <p><b>${esc(where || '고른 사람')}</b> — ${targets.length}명
+    ${already ? `<span class="sub">(${already}명은 이미 ${blocked ? '막혀 있어' : '안 막혀 있어'} 건너뜁니다)</span>` : ''}</p>
+
+    ${targets.length === 0 ? `<div class="card">
+      <b>할 일이 없습니다.</b>
+      <div class="sub">고르신 분들은 이미 ${blocked ? '전부 막혀 있습니다' : '아무도 막혀 있지 않습니다'}.</div>
+    </div>` : `
+    <div class="card">
+      <b>${blocked ? '막으면 로그인만 안 됩니다.' : '풀면 다시 로그인할 수 있습니다.'}</b>
+      <div class="sub">
+        ${blocked
+          ? '과제·파일·대화는 그대로 남습니다. 팀에서 빠지지도 않습니다. 잘못 고르셨으면 [차단 풀기] 로 되돌리시면 됩니다.'
+          : '막기 전에 쓰던 것을 그대로 다시 쓸 수 있습니다.'}
+      </div>
+    </div>
+
+    ${blocked ? `<div class="card warn">
+      <b>라이선스는 그대로 물려 있습니다.</b>
+      <div class="sub">막는 것만으로는 자리를 돌려받지 못합니다. 자리를 비우려면 계정을 지워야 하는데,
+      그건 되돌릴 수 없는 일이라 Teavel 이 하지 않습니다 — 정식 관리 센터에서 하십니다.</div>
+    </div>` : ''}
+
+    <details class="tell">
+      <summary>누가 ${esc(what)} 되는지 보기 (${targets.length}명)</summary>
+      <div class="body">
+        ${targets.slice(0, 300).map(r =>
+          `<span class="pill sys" style="margin:1px">${esc(r.name || r.upn)}</span>`).join(' ')}
+        ${targets.length > 300 ? `<div class="sub" style="margin-top:8px">…그 밖에 ${targets.length - 300}명 더</div>` : ''}
+      </div>
+    </details>`}
+
+    <div class="acts">
+      <button id="bl-no">그만두기</button>
+      <button id="bl-go" class="${blocked ? 'bad' : 'go'}" ${targets.length ? '' : 'disabled'}>
+        ${targets.length}명 ${esc(what)}
+      </button>
+    </div>`,
+
+  (el, shut) => {
+    $('#bl-no', el).onclick = shut;
+
+    const go = $('#bl-go', el);
+    if (go.disabled) return;
+
+    go.onclick = async () => {
+      shut();
+      run(await api('/api/people/block', {
+        upns: targets.map(r => r.upn),
+        blocked,
+        label: `${where || ''} ${targets.length}명 ${what}`,
+      }), draw);
+    };
+  });
 }
 
 /**
@@ -956,7 +1126,8 @@ async function stock({ title, lede, kind }) {
       <button class="cmd" id="go" ${make.length ? '' : 'disabled'}>
         <span class="i">&#xE710;</span> ${team ? '반 팀 만들기' : '그룹 만들기'}${make.length ? ` (${make.length})` : ''}
       </button>
-      ${team ? `<button class="cmd" id="owners"><span class="i">&#xE77B;</span> 반별 담임 정하기</button>` : ''}
+      ${team ? `<button class="cmd" id="new"><span class="i">&#xE902;</span> 새 팀 만들기</button>
+                <button class="cmd" id="owners"><span class="i">&#xE77B;</span> 반별 담임 정하기</button>` : ''}
       <span class="grow"></span>
       <input type="search" id="q" placeholder="이름으로 찾기" style="width:220px">
       <label style="display:flex;align-items:center;gap:6px;padding:0 10px">
@@ -982,6 +1153,9 @@ async function stock({ title, lede, kind }) {
 
   const owners = $('#owners');
   if (owners) owners.onclick = () => openClasses('owner');
+
+  const fresh = $('#new');
+  if (fresh) fresh.onclick = () => openNewTeam();
 
   const go = $('#go');
   if (go && make.length) go.onclick = async () => {
@@ -1044,6 +1218,85 @@ async function stock({ title, lede, kind }) {
   $('#q').oninput = paint;
   $('#only').onchange = paint;
   paint();
+}
+
+/**
+ * 선언에 없는 팀을 하나 만든다.
+ *
+ * 학교가 하는 일이 선언에 다 적혀 있지는 않다 — <b>'1학년 과학' 처럼 그때그때 생기는 팀</b>이
+ * 있고, 그것 때문에 선언 파일을 고치게 하면 그 자리에서 막힌다.
+ */
+function openNewTeam() {
+  veil(`
+    <h3>새 팀 만들기</h3>
+    <p>선언에 없는 팀을 하나 만듭니다. 만든 뒤에는 <b>구성원 화면에서 사람을 넣으시면 됩니다.</b></p>
+
+    <label class="lbl">팀 이름</label>
+    <input type="text" id="nt-name" placeholder="1학년 과학" autocomplete="off">
+    <div class="sub">Teams 에 이 이름으로 보입니다. 한글로 적으셔도 됩니다.</div>
+
+    <label class="lbl" style="margin-top:14px">별칭 (메일 주소가 됩니다)</label>
+    <input type="text" id="nt-alias" placeholder="g1-science" autocomplete="off">
+    <div class="sub" id="nt-mail">영문자·숫자·붙임표만 씁니다. 한글은 쓸 수 없습니다.</div>
+
+    <label class="lbl" style="margin-top:14px">어떤 팀인가요?</label>
+    <select id="nt-tpl" style="width:100%">
+      <option value="educationClass">수업 팀 — 과제를 낼 수 있습니다 (대개 이것)</option>
+      <option value="standard">일반 팀 — 대화와 파일만</option>
+      <option value="educationStaff">교직원 팀</option>
+    </select>
+
+    <label class="lbl" style="margin-top:14px">설명 (안 적으셔도 됩니다)</label>
+    <input type="text" id="nt-note" placeholder="1학년 과학 수업" autocomplete="off">
+
+    <div class="card warn" style="margin-top:14px">
+      <b>만든 팀은 담당 선생님이 [활성화] 를 눌러야 학생에게 보입니다.</b>
+      <div class="sub">Teavel 이 대신 해 드릴 수 없는 일입니다 — 선생님 각자가 자기 Teams 에서 하십니다.</div>
+    </div>
+
+    <div class="acts">
+      <button id="nt-no">그만두기</button>
+      <button id="nt-go" class="go" disabled>만들기</button>
+    </div>`,
+
+  (el, shut) => {
+    const name = $('#nt-name', el);
+    const alias = $('#nt-alias', el);
+    const go = $('#nt-go', el);
+
+    name.focus();
+
+    const check = () => {
+      const a = alias.value.trim();
+      const ok = /^[A-Za-z0-9._-]+$/.test(a);
+
+      $('#nt-mail', el).innerHTML = a.length === 0
+        ? '영문자·숫자·붙임표만 씁니다. 한글은 쓸 수 없습니다.'
+        : ok ? `메일 주소는 <b>${esc(a)}@…</b> 가 됩니다.`
+             : '<b style="color:var(--danger)">영문자·숫자·붙임표·밑줄·점만 쓸 수 있습니다.</b>';
+
+      go.disabled = name.value.trim().length === 0 || !ok;
+    };
+
+    name.oninput = check;
+    alias.oninput = check;
+
+    $('#nt-no', el).onclick = shut;
+
+    go.onclick = async () => {
+      const body = {
+        displayName: name.value.trim(),
+        mailNickname: alias.value.trim(),
+        description: $('#nt-note', el).value.trim(),
+        template: $('#nt-tpl', el).value,
+      };
+      shut();
+
+      const started = await api('/api/teams/new', body);
+      if (!started.ok) { toast(started.message, true); return; }
+      run(started, draw);
+    };
+  });
 }
 
 function securityCard(hand) {

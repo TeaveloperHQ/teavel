@@ -9,12 +9,22 @@ namespace Teavel.M365;
 /// 켜져 있는 서비스 플랜을 정렬해 이어 붙인 것. 같은 라이선스를 받은 사람은 같은 값이 된다.
 /// SKU 이름이 아니다 — 이름을 알아내려 들지 않는 것이 이 방식의 요점이다.
 /// </param>
+/// <param name="Blocked">
+/// 차단된 계정이면 "1", 아니면 "0". <b>모르면 빈 문자열</b> —
+/// '아니다'로 단정하면 이미 막아 둔 졸업생이 멀쩡한 계정으로 보인다.
+/// </param>
+/// <param name="Created">
+/// 계정을 만든 날(yyyy-MM-dd). 모르면 빈 문자열.
+/// <b>졸업생처럼 오래된 계정을 가려낼 때 이것으로 줄을 세운다.</b>
+/// </param>
 public sealed record TenantUser(
     string Upn,
     string DisplayName,
     string Department,
     string AccountType,
-    string LicenseBundle);
+    string LicenseBundle,
+    string Created = "",
+    string Blocked = "");
 
 /// <summary>라이선스 꾸러미가 같은 사람들의 묶음.</summary>
 /// <param name="Bundle">그 꾸러미 값. 화면에 보여 주지는 않는다 — 사람이 읽을 것이 못 된다.</param>
@@ -80,7 +90,9 @@ public static class UserDirectory
                 DisplayName: f.Length > 2 ? f[2].Trim() : "",
                 Department: f.Length > 3 ? f[3].Trim() : "",
                 AccountType: f.Length > 4 ? f[4].Trim() : "",
-                LicenseBundle: f.Length > 5 ? f[5].Trim() : ""));
+                LicenseBundle: f.Length > 5 ? f[5].Trim() : "",
+                Created: f.Length > 6 ? f[6].Trim() : "",
+                Blocked: f.Length > 7 ? f[7].Trim() : ""));
         }
 
         return people;

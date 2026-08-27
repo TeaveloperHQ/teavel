@@ -112,8 +112,11 @@ public sealed class AdminApi
             "/api/plan/create" => Ok(StartCreate(Str(Body(ask), "kind"), ct)),
             "/api/classes/scan" => Ok(StartScan(ct)),
             "/api/members/add" => Ok(StartAddMembers(ask, ct)),
+            "/api/members/assign" => Ok(StartAssign(ask, ct)),
+            "/api/teams/new" => Ok(StartNewTeam(ask, ct)),
             "/api/owners/assign" => Ok(StartAssignOwners(ask, ct)),
             "/api/people/rename" => await RenamePersonAsync(ask, ct).ConfigureAwait(false),
+            "/api/people/block" => Ok(StartBlock(ask, ct)),
             "/api/roster" => Ok(TakeRoster(ask)),
             "/api/tree/drop" => Ok(DropDeclared(ask)),
             "/api/tree/reset" => Ok(ResetDeclared()),
@@ -417,6 +420,8 @@ public sealed class AdminApi
                     classNo,
                     license = role is "교사" or "학생" ? role : role == "라이선스 없음" ? "없음" : "그 밖",
                     licenseCount = size.TryGetValue(p.LicenseBundle, out var n) ? n : 0,
+                    created = p.Created,
+                    blocked = p.Blocked,
                     groups = mine.TryGetValue(p.Upn, out var gs) ? gs : new List<string>(),
                 };
             }),
@@ -1067,6 +1072,140 @@ public sealed class AdminApi
         }, ct));
     }
 
+    /// <summary>
+    /// 선언에 없는 팀을 하나 만든다.
+    /// </summary>
+    /// <remarks>
+    /// 학교가 하는 일이 선언에 다 적혀 있지는 않다. <b>'1학년 과학' 처럼 그때그때 생기는 팀</b>이
+    /// 있고, 그것 때문에 선언 파일을 고치게 하면 그 자리에서 막힌다. 만든 뒤 재고에 곧바로
+    /// 넣어 두어야 <b>구성원 화면에서 바로 고를 수 있다.</b>
+    /// </remarks>
+    private object StartNewTeam(HttpAsk ask, CancellationToken ct)
+    {
+        var body = Body(ask);
+        var name = Str(body, "displayName").Trim();
+        var alias = Str(body, "mailNickname").Trim();
+        var note = Str(body, "description").Trim();
+        var template = Str(body, "template") is { Length: > 0 } t ? t : "educationClass";
+
+        var wrong = NameProblem(name);
+        if (wrong is not null) return new { ok = false, message = wrong };
+
+        if (!AliasOk.IsMatch(alias))
+            return new { ok = false, message = "별칭에는 영문자·숫자·붙임표·밑줄·점만 쓸 수 있습니다. 이것이 메일 주소가 됩니다." };
+
+        if (_inventory.Any(g => string.Equals(g.DisplayName, name, StringComparison.OrdinalIgnoreCase)
+                             || string.Equals(g.MailNickname, alias, StringComparison.OrdinalIgnoreCase)))
+            return new { ok = false, message = $"'{name}' 또는 별칭 '{alias}' 이(가) 이미 있습니다." };
+
+        return Started(_jobs.Start($"'{name}' 만들기", async (job, jct) =>
+        {
+            if (!await EnsureTeamsAsync(job, jct).ConfigureAwait(false)) { job.Finish("팀에 붙지 못했습니다."); return; }
+
+            var res = await _host.CallAsync("New-TeavelM365Group", new Dictionary<string, object?>
+            {
+                ["DisplayName"] = name,
+                ["MailNickname"] = alias,
+                ["Description"] = note,
+                ["Kind"] = "team",
+                ["Template"] = template,
+                ["Visibility"] = "private",
+            }, timeout: TimeSpan.FromMinutes(5), ct: jct).ConfigureAwait(false);
+
+            if (!res.Ok) { job.Error(res.Message); job.Details(res.Details); job.Finish("만들지 못했습니다."); return; }
+
+            job.Ok(res.Message);
+            job.Details(res.Details);
+
+            var id = M365Flow.ExtractGroupId(res.Details);
+            _inventory.Add(new ExistingGroup(name, alias, IsTeam: true,
+                MemberCount: 0, Created: DateTime.Now.ToString("yyyy-MM-dd"), Origin: "teavel", GroupId: id));
+
+            job.Dim("담당 선생님이 Teams 에서 [활성화] 를 눌러야 학생에게 보입니다.");
+            job.Dim("이제 구성원 화면에서 이 팀에 사람을 넣으실 수 있습니다.");
+            job.Finish($"'{name}' 을(를) 만들었습니다.");
+        }, ct));
+    }
+
+    /// <summary>메일 주소가 되는 별칭. 한글을 넣으면 뜻이 날아가고 주소가 엉킨다.</summary>
+    private static readonly Regex AliasOk = new(@"^[A-Za-z0-9._-]+$", RegexOptions.Compiled);
+
+    /// <summary>
+    /// 고른 사람들을 그룹 하나에 넣는다.
+    /// </summary>
+    /// <remarks>
+    /// <b>이미 들어 있는 사람은 먼저 빼고 센다.</b> 1학년 예순 명을 넣는데 마흔이 이미
+    /// 들어 있으면 스무 명만 넣어야 한다 — 그러지 않으면 넣을 때마다 실패 마흔 줄이 쌓이고,
+    /// 관리자는 무엇이 진짜 문제인지 못 가린다.
+    /// </remarks>
+    private object StartAssign(HttpAsk ask, CancellationToken ct)
+    {
+        var body = Body(ask);
+        var groupId = Str(body, "groupId");
+        var role = Str(body, "role") is { Length: > 0 } r ? r : "Member";
+        var upns = Arr(body, "upns");
+        var label = Str(body, "label");
+
+        if (groupId.Length == 0 || upns.Count == 0)
+            return new { ok = false, message = "누구를 어느 팀에 넣을지 받지 못했습니다." };
+
+        var team = _inventory.FirstOrDefault(g => g.GroupId.Equals(groupId, StringComparison.OrdinalIgnoreCase));
+
+        return Started(_jobs.Start(label.Length > 0 ? label : "그룹에 넣기", async (job, jct) =>
+        {
+            if (!await EnsureTeamsAsync(job, jct).ConfigureAwait(false)) { job.Finish("팀에 붙지 못했습니다."); return; }
+
+            job.Info($"{team?.DisplayName ?? groupId} 에 지금 누가 들어 있는지 봅니다.");
+
+            var have = await _host.CallAsync("Get-TeavelTeamMember",
+                new Dictionary<string, object?> { ["GroupId"] = groupId },
+                timeout: TimeSpan.FromMinutes(2), ct: jct).ConfigureAwait(false);
+
+            var already = have.Ok
+                ? M365Flow.ParseMembers(have.Details).Select(m => m.Upn).ToHashSet(StringComparer.OrdinalIgnoreCase)
+                : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            var todo = upns.Where(u => !already.Contains(u)).ToList();
+
+            if (todo.Count == 0)
+            {
+                job.Ok($"{upns.Count}명이 이미 다 들어 있습니다. 넣을 사람이 없습니다.");
+                job.Finish("이미 다 들어 있습니다.");
+                return;
+            }
+
+            if (todo.Count < upns.Count)
+                job.Dim($"{upns.Count - todo.Count}명은 이미 들어 있어 건너뜁니다.");
+
+            job.Info($"{todo.Count}명을 넣습니다. 사람이 많으면 몇 분 걸립니다.");
+
+            var res = await _host.CallAsync("Add-TeavelTeamMember", new Dictionary<string, object?>
+            {
+                ["GroupId"] = groupId,
+                ["Users"] = todo,
+                ["Role"] = role,
+            }, timeout: TimeSpan.FromMinutes(20), ct: jct).ConfigureAwait(false);
+
+            if (!res.Ok) { job.Error(res.Message); job.Details(res.Details); job.Finish("넣지 못했습니다."); return; }
+
+            job.Ok(res.Message);
+
+            var bad = res.Details.Where(d => d.StartsWith("실패:", StringComparison.Ordinal)).ToList();
+            foreach (var d in bad.Take(10)) job.Warn(d);
+            if (bad.Count > 10) job.Warn($"…그 밖에 {bad.Count - 10}명 더");
+
+            // 다시 읽어 둔다. 사람 명부의 '속해 있는 그룹' 칸이 곧바로 맞아야 한다.
+            var back = await _host.CallAsync("Get-TeavelTeamMember",
+                new Dictionary<string, object?> { ["GroupId"] = groupId },
+                timeout: TimeSpan.FromMinutes(2), ct: jct).ConfigureAwait(false);
+
+            if (back.Ok) _members[groupId] = M365Flow.ParseMembers(back.Details);
+
+            job.Dim("학생 화면에 보이기까지 몇 분 걸릴 수 있습니다.");
+            job.Finish($"{todo.Count - bad.Count}명을 넣었습니다.");
+        }, ct));
+    }
+
     private object StartAssignOwners(HttpAsk ask, CancellationToken ct)
     {
         var body = Body(ask);
@@ -1100,6 +1239,63 @@ public sealed class AdminApi
             }
 
             job.Finish($"담임 {done}명을 지정했습니다.");
+        }, ct));
+    }
+
+    /// <summary>
+    /// 계정을 막거나 푼다.
+    /// </summary>
+    /// <remarks>
+    /// <b>졸업생 정리는 지우는 것이 아니라 막는 것이다.</b> 지우면 그 아이의 과제·파일·대화가
+    /// 함께 사라지고 되돌릴 수 없다. 막아 두면 로그인만 안 될 뿐 자료는 그대로 있고,
+    /// 잘못 골랐어도 풀면 그만이다. Exchange 로 되므로 동의 화면도 없다.
+    ///
+    /// <b>한 사람이 막혀도 나머지는 마저 한다</b> — 자기 자신은 막을 수 없는데,
+    /// 예순 명 중에 그 계정이 섞였다고 쉰아홉을 못 하면 안 된다.
+    /// </remarks>
+    private object StartBlock(HttpAsk ask, CancellationToken ct)
+    {
+        var body = Body(ask);
+        var upns = Arr(body, "upns");
+        var blocked = !body.TryGetProperty("blocked", out var b) || b.ValueKind != JsonValueKind.False;
+        var label = Str(body, "label");
+
+        if (upns.Count == 0) return new { ok = false, message = "누구를 막거나 풀지 받지 못했습니다." };
+
+        var byUpn = _people.ToDictionary(p => p.Upn, p => p.DisplayName, StringComparer.OrdinalIgnoreCase);
+        var what = blocked ? "차단" : "차단 풀기";
+
+        return Started(_jobs.Start(label.Length > 0 ? label : $"{what} {upns.Count}명", async (job, jct) =>
+        {
+            var done = 0;
+            var failed = 0;
+
+            foreach (var upn in upns)
+            {
+                jct.ThrowIfCancellationRequested();
+
+                var res = await _host.CallAsync("Set-TeavelAccountBlocked", new Dictionary<string, object?>
+                {
+                    ["Identity"] = upn,
+                    ["Blocked"] = blocked,
+                }, timeout: TimeSpan.FromMinutes(2), ct: jct).ConfigureAwait(false);
+
+                var name = byUpn.TryGetValue(upn, out var n) && n.Length > 0 ? n : upn;
+
+                if (res.Ok) { job.Ok($"{name} — {what}했습니다."); done++; }
+                else { job.Warn($"{name} — {res.Message}"); failed++; }
+            }
+
+            // 화면의 차단 칸이 곧바로 맞아야 한다. 사람 목록을 다시 읽는다.
+            await ReadPeopleAsync(jct).ConfigureAwait(false);
+
+            if (blocked)
+            {
+                job.Dim("막힌 계정은 로그인만 안 됩니다. 과제·파일·대화는 그대로 있습니다.");
+                job.Dim("잘못 고르셨으면 같은 자리에서 [차단 풀기] 로 되돌리실 수 있습니다.");
+            }
+
+            job.Finish(failed == 0 ? $"{done}명을 {what}했습니다." : $"{done}명은 {what}하고 {failed}명은 못 했습니다.");
         }, ct));
     }
 

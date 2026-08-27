@@ -708,6 +708,8 @@ function Get-TeavelTenantUser {
     $users = @(Get-CsOnlineUser -ResultSize $Limit -ErrorAction Stop)
 
     $d = New-Object System.Collections.Generic.List[string]
+    $rows = New-Object System.Collections.Generic.List[object]
+
     foreach ($u in $users) {
         $upn = ''
         try { $upn = [string]$u.UserPrincipalName } catch { }
@@ -745,7 +747,56 @@ function Get-TeavelTenantUser {
 
         $bundle = (($caps | Sort-Object -Unique) -join ',')
 
-        $d.Add(("USER`t{0}`t{1}`t{2}`t{3}`t{4}" -f $upn, $name, $dept, $kind, $bundle))
+        $made = ''
+        try {
+            if ($u.PSObject.Properties['WhenCreated'] -and $u.WhenCreated) {
+                $made = ([datetime]$u.WhenCreated).ToString('yyyy-MM-dd')
+            }
+        } catch { }
+
+        # 차단된 계정인지. 모르면 빈 칸으로 둔다 — '아니다' 로 단정하면
+        # 이미 막아 둔 졸업생이 멀쩡한 계정으로 보인다.
+        $blocked = ''
+        try {
+            if ($u.PSObject.Properties['AccountEnabled'] -and $null -ne $u.AccountEnabled) {
+                $blocked = $(if ($u.AccountEnabled) { '0' } else { '1' })
+            }
+        } catch { }
+
+        $rows.Add([pscustomobject]@{
+            Upn = $upn; Name = $name; Dept = $dept; Kind = $kind
+            Bundle = $bundle; Made = $made; Blocked = $blocked
+        })
+    }
+
+    # 만든 날은 Get-CsOnlineUser 가 줄 때도 있고 안 줄 때도 있다 — 판마다 달랐다.
+    # 하나도 못 받았으면 Exchange 쪽에서 한 번에 받아 아이디로 맞춘다.
+    # 못 받아도 그만이다. 그 칸만 비고 나머지는 그대로 쓴다.
+    if (-not ($rows | Where-Object { $_.Made -and $_.Blocked })) {
+        try {
+            Import-Module ExchangeOnlineManagement -ErrorAction Stop
+            $when = @{}
+            $off  = @{}
+            foreach ($e in @(Get-User -ResultSize Unlimited -ErrorAction Stop)) {
+                $id = ''
+                try { $id = [string]$e.UserPrincipalName } catch { }
+                if (-not $id) { continue }
+                try { if ($e.WhenCreated) { $when[$id] = ([datetime]$e.WhenCreated).ToString('yyyy-MM-dd') } } catch { }
+                try {
+                    if ($e.PSObject.Properties['AccountDisabled'] -and $null -ne $e.AccountDisabled) {
+                        $off[$id] = $(if ($e.AccountDisabled) { '1' } else { '0' })
+                    }
+                } catch { }
+            }
+            foreach ($r in $rows) {
+                if (-not $r.Made -and $when.ContainsKey($r.Upn)) { $r.Made = $when[$r.Upn] }
+                if (-not $r.Blocked -and $off.ContainsKey($r.Upn)) { $r.Blocked = $off[$r.Upn] }
+            }
+        } catch { }
+    }
+
+    foreach ($r in $rows) {
+        $d.Add(("USER`t{0}`t{1}`t{2}`t{3}`t{4}`t{5}`t{6}" -f $r.Upn, $r.Name, $r.Dept, $r.Kind, $r.Bundle, $r.Made, $r.Blocked))
     }
 
     New-TeavelResult -Message "사람 $($users.Count)명을 읽었습니다." -Details $d
@@ -774,6 +825,8 @@ function Get-TeavelUserName {
     $users = @(Get-User -ResultSize $Limit -ErrorAction Stop)
 
     $d = New-Object System.Collections.Generic.List[string]
+    $rows = New-Object System.Collections.Generic.List[object]
+
     foreach ($u in $users) {
         $upn = ''
         try { $upn = [string]$u.UserPrincipalName } catch { }
@@ -913,6 +966,8 @@ function Get-TeavelTeamMember {
     $users = @(Get-TeamUser -GroupId $GroupId -ErrorAction Stop)
 
     $d = New-Object System.Collections.Generic.List[string]
+    $rows = New-Object System.Collections.Generic.List[object]
+
     foreach ($u in $users) {
         $upn = ''
         try { $upn = [string]$u.User } catch { }
@@ -1394,6 +1449,48 @@ function Reset-TeavelPassword {
     New-TeavelResult -Message "$Identity — 임시 비밀번호로 바꿨습니다." -Details @()
 }
 
+<#
+    ── 계정 차단 ─────────────────────────────────────────────────────────
+
+    졸업생 정리의 핵심 동작이다. <b>지우지 않고 막는다.</b>
+
+    지우면 그 아이의 과제·파일·대화가 함께 사라지고 되돌릴 수 없다. 막아 두면 로그인만
+    안 될 뿐 자료는 그대로 있고, 잘못 골랐어도 풀면 그만이다. 그리고 이것은 Exchange 로
+    되므로 동의 화면이 없다 — Graph 가 필요한 삭제와 다르다.
+
+    (라이선스를 돌려받으려면 언젠가 지워야 하지만, 그건 다른 결정이고 다른 날의 일이다.)
+#>
+
+function Set-TeavelAccountBlocked {
+    param(
+        [Parameter(Mandatory)][string] $Identity,
+        [bool] $Blocked = $true
+    )
+
+    Import-Module ExchangeOnlineManagement -ErrorAction Stop
+
+    # 자기 자신을 막으면 그 자리에서 관리 화면까지 함께 끝난다.
+    # 그리고 풀어 줄 사람이 자기 자신이라 되돌릴 방법이 없다.
+    if ($Blocked) {
+        $me = ''
+        try {
+            $conn = @(Get-ConnectionInformation -ErrorAction Stop)
+            if ($conn.Count -gt 0) { $me = [string]$conn[0].UserPrincipalName }
+        } catch { }
+
+        if ($me -and $me -eq $Identity) {
+            throw '지금 로그인하신 계정입니다. 자기 자신은 차단할 수 없습니다.'
+        }
+    }
+
+    Invoke-TeavelWrite -Command 'Set-User' -Arguments @{
+        Identity = $Identity; AccountDisabled = $Blocked
+    }
+
+    $what = $(if ($Blocked) { '차단했습니다.' } else { '차단을 풀었습니다.' })
+    New-TeavelResult -Message "$Identity — $what" -Details @()
+}
+
 Export-ModuleMember -Function `
     Test-TeavelUnderOneDrive, Get-TeavelStudentId, Get-TeavelCohort, `
     Get-TeavelModuleDirectory, Get-TeavelM365Readiness, Install-TeavelM365Module, `
@@ -1404,4 +1501,5 @@ Export-ModuleMember -Function `
     New-TeavelM365Group, Sync-TeavelTeamChannel, `
     Get-TeavelTeamMember, Add-TeavelTeamMember, Remove-TeavelTeamStudent, `
     Rename-TeavelM365Group, Remove-TeavelM365Group, `
-    Get-TeavelGraphReadiness, Install-TeavelGraphModule, Connect-TeavelGraph, Reset-TeavelPassword
+    Get-TeavelGraphReadiness, Install-TeavelGraphModule, Connect-TeavelGraph, Reset-TeavelPassword, `
+    Set-TeavelAccountBlocked
