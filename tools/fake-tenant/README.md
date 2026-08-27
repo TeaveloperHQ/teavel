@@ -97,13 +97,24 @@ mv "$REAL" "$REAL.parked"
 mv "$REAL.parked" "$REAL"      # 반드시 되돌린다
 ```
 
-## 가짜 Graph — 비밀번호 때문에
+## 가짜 Graph — 비밀번호와 계정 삭제 때문에
 
-비밀번호 바꾸기는 Graph 가 필요한 유일한 자리다(Exchange·Teams 에는 cmdlet 이 없다).
-진짜 테넌트에 대고 남의 비밀번호를 바꿔 보며 시험할 수는 없으므로 여기도 가짜를 둔다.
+Graph 가 필요한 자리는 둘뿐이다 — 비밀번호 바꾸기와 계정 지우기(Exchange·Teams 에는
+둘 다 cmdlet 이 없다). 진짜 테넌트에 대고 남의 비밀번호를 바꾸거나 계정을 지워 보며
+시험할 수는 없으므로 여기도 가짜를 둔다.
 
 - `Microsoft.Graph.Authentication` — 연결과 권한 동의
-- `Microsoft.Graph.Users` — `Update-MgUser`
+- `Microsoft.Graph.Users` — `Update-MgUser`(비밀번호), `Remove-MgUser`(계정 지우기)
+
+**권한이 둘로 갈린다.** 비밀번호는 `User-PasswordProfile.ReadWrite.All`, 지우기는
+그보다 넓은 `User.ReadWrite.All` 이다. 비밀번호로 한 번 붙었다고 지울 수 있는 것이
+아니므로 화면은 권한마다 따로 세고, 지울 때 동의 화면이 한 번 더 뜬다.
+
+**지운 사람은 Exchange 쪽에서도 사라져야 한다.** 진짜는 한 곳에서 지우면 두 곳이 함께
+맞는다. 흉내가 얕으면 '지웠습니다' 라고 해 놓고 목록에 그대로 남아 있어, 관리자가
+안 지워진 줄 알고 한 번 더 누른다. 그래서 `Remove-MgUser` 가 가짜 Exchange 의
+`Remove-TeavelFakeUser` 를 함께 부르고, 지운 아이디는 무덤에 넣어 `Get-User` 가
+다시 만들어 주지 않게 한다.
 
 **재현할 수 있어야 하는 갈래가 둘 있다.**
 

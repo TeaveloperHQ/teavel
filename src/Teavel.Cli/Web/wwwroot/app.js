@@ -138,6 +138,29 @@ async function run(started, onDone) {
     if (!view.ok) return;
 
     for (const line of view.lines) {
+      // 코드를 적어 넣는 로그인 — 주소와 코드를 크게, 그리고 손으로 옮겨 적지 않게.
+      if (line.kind === 'code') {
+        const [url, code] = line.text.split('	');
+        const box = document.createElement('div');
+        box.className = 'devcode';
+        box.innerHTML = `
+          <div>인터넷 창을 열어 드렸습니다. 거기에 <b>이 코드</b>를 넣으세요.</div>
+          <div class="row" style="margin:8px 0 0">
+            <code class="big">${esc(code)}</code>
+            <button class="go" data-copy="${esc(code)}">코드 복사</button>
+            <a href="${esc(url)}" target="_blank" rel="noreferrer noopener"><button>창이 안 열렸으면 여기</button></a>
+          </div>
+          <div class="sub" style="margin-top:6px">${esc(url)}</div>`;
+        $('#drawer-lines').appendChild(box);
+
+        const copy = $('button[data-copy]', box);
+        copy.onclick = async () => {
+          try { await navigator.clipboard.writeText(code); copy.textContent = '복사했습니다'; }
+          catch (e) { toast('복사하지 못했습니다. 코드를 직접 적어 주세요.', true); }
+        };
+        continue;
+      }
+
       const div = document.createElement('div');
       div.className = line.kind;
       div.textContent = line.text;
@@ -318,6 +341,7 @@ PAGES['한눈에'] = async () => {
   const hello = await api('/api/hello');
 
   const todo = [];
+  if (!o.peopleRead) todo.push(['학교 사람 목록을 아직 읽지 않았습니다. 구성원 화면에서 [지금 읽기] 를 누르시면 됩니다.', '#/구성원', '구성원 열기']);
   if (!hello.rosterRows) todo.push(['명단을 올리시면 반 팀과 학생 넣기가 열립니다.', '', '명단 올리기']);
   if (o.toCreateTeams) todo.push([`아직 없는 반 팀이 ${o.toCreateTeams}개 있습니다.`, '#/팀', '만들러 가기']);
   if (o.conflicts) todo.push([`이름이 비슷해 사람이 봐야 할 것이 ${o.conflicts}개 있습니다.`, '#/팀', '확인하기']);
@@ -461,11 +485,21 @@ PAGES['구성원'] = async () => {
       ${p.hasRoster ? '' : '학년·반은 표시 이름의 학번에서 알아냈습니다 — 명단을 올리시면 더 정확해집니다.'}
     </p>
 
-    ${p.scanned ? '' : `<div class="card warn" style="display:flex;align-items:center;gap:14px">
+    ${p.read ? '' : `<div class="card warn" style="display:flex;align-items:center;gap:14px">
+      <div class="grow">
+        <b>학교 사람 목록을 아직 읽지 않았습니다.</b>
+        <div class="sub">사람이 많으면 오래 걸려서 시작할 때 자동으로 읽지 않습니다.
+        <b>로그인은 더 필요 없습니다.</b>
+        ${p.problem ? esc(p.problem) : ''}</div>
+      </div>
+      <button class="go" id="readppl">지금 읽기</button>
+    </div>`}
+
+    ${!p.read || p.scanned ? '' : `<div class="card warn" style="display:flex;align-items:center;gap:14px">
       <div class="grow">
         <b>누가 어느 팀에 있는지 아직 안 읽었습니다.</b>
-        <div class="sub">읽어야 '속해 있는 그룹' 칸이 채워집니다. 팀 수만큼 물어보므로 조금 걸리고,
-        <b>로그인이 한 번 더</b> 필요합니다.</div>
+        <div class="sub">읽어야 '속해 있는 그룹' 칸이 채워집니다. 팀 수만큼 물어보므로 조금 걸립니다.
+        <b>로그인은 더 필요 없습니다.</b></div>
       </div>
       <button id="scan">지금 읽기</button>
     </div>`}
@@ -476,6 +510,7 @@ PAGES['구성원'] = async () => {
       <button class="cmd" id="pw"><span class="i">&#xE192;</span> 비밀번호 재설정</button>
       <button class="cmd bad" id="block"><span class="i">&#xE72E;</span> 차단</button>
       <button class="cmd" id="unblock"><span class="i">&#xE785;</span> 차단 풀기</button>
+      <button class="cmd bad" id="del"><span class="i">&#xE74D;</span> 계정 지우기</button>
       <span class="grow"></span>
       <input type="search" id="q" placeholder="이름 · 아이디로 찾기" style="width:230px">
       <span class="sub" id="count"></span>
@@ -507,9 +542,13 @@ PAGES['구성원'] = async () => {
   $('#assign').onclick = () => openAssign(branch(), treeLabel(tree, state.pick));
   $('#block').onclick = () => openBlock(branch(), treeLabel(tree, state.pick), true);
   $('#unblock').onclick = () => openBlock(branch(), treeLabel(tree, state.pick), false);
+  $('#del').onclick = () => openRemove(branch(), treeLabel(tree, state.pick));
 
   const scan = $('#scan');
   if (scan) scan.onclick = async () => run(await api('/api/classes/scan', {}), draw);
+
+  const readppl = $('#readppl');
+  if (readppl) readppl.onclick = async () => run(await api('/api/people/read', {}), draw);
 
   $$('th.sortable').forEach(th => th.onclick = () => {
     const key = th.dataset.sort;
@@ -729,8 +768,8 @@ function openBlock(people, where, blocked) {
 
     ${blocked ? `<div class="card warn">
       <b>라이선스는 그대로 물려 있습니다.</b>
-      <div class="sub">막는 것만으로는 자리를 돌려받지 못합니다. 자리를 비우려면 계정을 지워야 하는데,
-      그건 되돌릴 수 없는 일이라 Teavel 이 하지 않습니다 — 정식 관리 센터에서 하십니다.</div>
+      <div class="sub">막는 것만으로는 자리를 돌려받지 못합니다. 자리를 비우려면 계정을 지워야 하고,
+      그건 옆의 [계정 지우기] 에 있습니다 — 되돌릴 수 없는 일이라 문을 따로 세워 두었습니다.</div>
     </div>` : ''}
 
     <details class="tell">
@@ -761,6 +800,102 @@ function openBlock(people, where, blocked) {
         upns: targets.map(r => r.upn),
         blocked,
         label: `${where || ''} ${targets.length}명 ${what}`,
+      }), draw);
+    };
+  });
+}
+
+/**
+ * 계정 지우기.
+ *
+ * <b>이 화면에서 가장 되돌리기 어려운 일이다.</b> 그래서 그룹 지우기와 같은 문을 세운다 —
+ * 몇 명을 지우는지 숫자를 그대로 적어야 단추가 열린다. 예순 명이 단추 하나로
+ * 사라지면 안 되고, '잘못 눌렀다' 는 말이 나올 자리를 아예 없애야 한다.
+ *
+ * 지울 사람의 이름을 <b>접지 않고 펼쳐서</b> 보여 준다. 다른 화면에서는 접어 두지만
+ * 여기서는 지워질 사람을 한 번은 눈으로 보고 넘어가시게 한다.
+ */
+function openRemove(people, where) {
+  const targets = people.slice();
+
+  veil(`
+    <h3>계정 지우기</h3>
+    <p><b>${esc(where || '고른 사람')}</b> — ${targets.length}명</p>
+
+    <div class="card warn">
+      <b>지우면 그 사람의 것이 함께 사라집니다.</b>
+      <div class="sub">메일 · 과제 · 파일 · OneDrive 가 같이 지워집니다.
+      팀에서 내보내는 것과는 다릅니다.</div>
+    </div>
+
+    <div class="card">
+      <b>30일 안에는 되살릴 수 있습니다.</b>
+      <div class="sub">정식 관리 센터의 <i>사용자 › 삭제된 사용자</i> 에 30일 동안 남아 있습니다.
+      그 뒤에는 아무도 되살리지 못합니다.</div>
+    </div>
+
+    <div class="card">
+      <b>라이선스 자리는 지워야 돌아옵니다.</b>
+      <div class="sub">막아 두기만 하면 자리는 계속 물려 있습니다.
+      아직 쓸지 모르겠는 계정이라면 [차단] 이 낫습니다 — 그건 언제든 되돌립니다.</div>
+    </div>
+
+    <div id="rm-ready"><div class="loading">준비 상태를 보는 중…</div></div>
+
+    <details class="tell" open>
+      <summary>지워지는 사람 (${targets.length}명)</summary>
+      <div class="body">
+        ${targets.slice(0, 300).map(r =>
+          `<span class="pill stop" style="margin:1px">${esc(r.name || r.upn)}</span>`).join(' ')}
+        ${targets.length > 300 ? `<div class="sub" style="margin-top:8px">…그 밖에 ${targets.length - 300}명 더</div>` : ''}
+      </div>
+    </details>
+
+    <div class="card">
+      <b>지우시려면 <code>${targets.length}</code> 을(를) 아래에 적어 주세요.</b>
+      <div class="sub">몇 명이 지워지는지 한 번 더 확인하시는 자리입니다.</div>
+      <input id="rm-typed" style="margin-top:10px;width:120px" autocomplete="off" placeholder="${targets.length}">
+    </div>
+
+    <div class="acts">
+      <button id="rm-no">그만두기</button>
+      <button id="rm-go" class="bad" disabled>${targets.length}명 지우기</button>
+    </div>`,
+
+  (el, shut) => {
+    $('#rm-no', el).onclick = shut;
+
+    const go = $('#rm-go', el);
+    const box = $('#rm-typed', el);
+
+    // 숫자가 맞아야 단추가 열린다.
+    const check = () => { go.disabled = box.value.trim() !== String(targets.length); };
+    box.oninput = check;
+    check();
+    box.focus();
+
+    // 비밀번호와 같은 창구(Graph)를 쓴다. 없으면 여기서 갖추게 한다 —
+    // 다만 허용하는 권한은 더 넓어서 동의 화면에 뜨는 말도 다르다.
+    api('/api/password/ready').then(r => {
+      $('#rm-ready', el).innerHTML = r.ready
+        ? ''
+        : `<div class="card warn">
+             <b>${esc(r.message)}</b>
+             ${(r.details || []).map(d => `<div class="sub">${esc(d)}</div>`).join('')}
+             <div class="row" style="margin:12px 0 0"><button id="rm-install">지금 갖추기</button></div>
+           </div>`;
+
+      const inst = $('#rm-install', el);
+      if (inst) inst.onclick = async () => { shut(); run(await api('/api/password/install', {}), draw); };
+    }).catch(() => { $('#rm-ready', el).innerHTML = ''; });
+
+    go.onclick = async () => {
+      const typed = box.value.trim();
+      shut();
+      run(await api('/api/people/delete', {
+        upns: targets.map(r => r.upn),
+        typed,
+        label: `계정 지우기 — ${where || ''} ${targets.length}명`,
       }), draw);
     };
   });
@@ -1067,7 +1202,7 @@ async function fillOwners(body, c, tail) {
       title: `담임 ${picks.length}명 지정`,
       confirm: '지정하기',
       body: `${twice ? `<p class="pill stop" style="padding:6px 10px">같은 선생님이 두 반 이상에 지정돼 있습니다. 확인해 주세요.</p>` : ''}
-             <p>지정하려면 <b>로그인이 한 번 더</b> 필요합니다 — 창이 따로 뜹니다.</p>
+             <p>로그인은 더 필요 없습니다 — 지금 붙어 있는 것으로 됩니다.</p>
              ${picks.map(p => `<div class="sub">${esc(p.classKey)} — ${esc(p.upn)}</div>`).join('')}`,
     });
     if (!yes) return;
@@ -1163,7 +1298,7 @@ async function stock({ title, lede, kind }) {
       title: `${make.length}개를 만듭니다`,
       confirm: '만들기',
       body: `<p>없는 것만 만듭니다. 이미 있는 것은 건드리지 않습니다.
-             ${team ? '<br>팀을 만들려면 <b>로그인이 한 번 더</b> 필요합니다 — 창이 따로 뜹니다.' : ''}</p>
+             ${team ? '<br>팀을 만들려면 <b>로그인이 한 번 더</b> 필요합니다.<br><b>창은 저절로 뜨지 않습니다</b> — 진행 칸의 주소와 코드를 인터넷 창에 직접 넣으세요.' : ''}</p>
              <div class="wrap"><table>
                <thead><tr><th>이름</th><th>별칭</th><th>채널</th></tr></thead>
                <tbody>${make.map(r => `<tr>

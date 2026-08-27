@@ -438,3 +438,19 @@ code {
 .lbl { display: block; font-weight: 600; font-size: 13px; margin: 0 0 4px; }
 #veil input[type=text], #veil select { width: 100%; }
 #veil .sub { margin-top: 4px; }
+
+/*
+  코드를 적어 넣는 로그인. 영어 한 줄에 묻혀 있으면 거기서 막힌다 —
+  주소와 코드를 떼어 크게 보여 주고, 손으로 옮겨 적지 않게 복사 단추를 둔다.
+*/
+.devcode {
+  background: var(--brand-soft);
+  border: 1px solid #c7e0f4;
+  border-radius: 2px;
+  padding: 12px 14px;
+  margin: 8px 0;
+}
+code.big {
+  font-size: 22px; font-weight: 700; letter-spacing: 3px;
+  padding: 6px 14px;
+}

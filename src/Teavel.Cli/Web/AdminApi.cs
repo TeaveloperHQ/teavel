@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reflection;
 using System.Text;
 using System.Text.Encodings.Web;
@@ -49,6 +50,10 @@ public sealed class AdminApi
     private bool _graphReady;
     private bool _scanned;
 
+    /// <summary>사람 목록을 실제로 읽었는지. 처음에는 아니다 — 팀 로그인 전이기 때문이다.</summary>
+    private bool _peopleRead;
+    private string _peopleProblem = "";
+
     /// <summary>화면에서 [끝내기] 를 눌렀는지. 콘솔이 이것을 보고 판을 접는다.</summary>
     public bool Finished { get; private set; }
 
@@ -70,8 +75,22 @@ public sealed class AdminApi
     public void Note(string line)
     {
         if (line.Trim().Length == 0) return;
+
+        // 코드를 적어 넣는 로그인이면, 그 자리를 사람이 덜 하게 만든다 —
+        // 페이지를 대신 열어 주고 코드는 따로 크게 보여 준다.
+        if (DeviceLogin.TryRead(line, out var url, out var code) && code != _lastCode)
+        {
+            _lastCode = code;
+            _jobs.Current?.Say("code", url + "\t" + code);
+            DeviceLogin.Open(url);
+            return;
+        }
+
         _jobs.Current?.Dim(line.Trim());
     }
+
+    /// <summary>같은 코드를 두 번 보여 주거나 창을 두 번 열지 않게.</summary>
+    private string _lastCode = "";
 
     /// <summary>처음 한 번 읽어 둔다. 화면이 뜨자마자 빈 표를 보여 주지 않으려는 것이다.</summary>
     public async Task PrimeAsync(CancellationToken ct)
@@ -117,6 +136,8 @@ public sealed class AdminApi
             "/api/owners/assign" => Ok(StartAssignOwners(ask, ct)),
             "/api/people/rename" => await RenamePersonAsync(ask, ct).ConfigureAwait(false),
             "/api/people/block" => Ok(StartBlock(ask, ct)),
+            "/api/people/delete" => Ok(StartRemovePeople(ask, ct)),
+            "/api/people/read" => Ok(StartReadPeople(ct)),
             "/api/roster" => Ok(TakeRoster(ask)),
             "/api/tree/drop" => Ok(DropDeclared(ask)),
             "/api/tree/reset" => Ok(ResetDeclared()),
@@ -149,12 +170,32 @@ public sealed class AdminApi
         if (res.Ok) _inventory = M365Flow.ParseInventory(res.Details);
     }
 
+    /// <summary>
+    /// 학교 사람 목록.
+    /// </summary>
+    /// <remarks>
+    /// <b>이것은 Teams 쪽에서 온다</b>(<c>Get-CsOnlineUser</c>). 그런데 화면은 시작할 때
+    /// 메일·그룹(Exchange)만 붙는다 — 로그인 창이 연달아 두 번 뜨는 것을 피하려는 것이다.
+    /// 그래서 처음에는 <b>읽히지 않는 것이 정상</b>이고, 관리자가 구성원을 볼 때 그때 붙는다.
+    ///
+    /// 실기에서 이것 때문에 구성원 화면이 <b>아무 말 없이 텅 비어</b> 있었다(2026-08-27).
+    /// 가짜 테넌트는 연결을 따지지 않아 드러나지 않았다. 그래서 왜 비었는지를 들고 있는다.
+    /// </remarks>
     private async Task ReadPeopleAsync(CancellationToken ct)
     {
         var res = await _host.CallAsync("Get-TeavelTenantUser",
             timeout: TimeSpan.FromMinutes(10), ct: ct).ConfigureAwait(false);
 
-        if (res.Ok) _people = UserDirectory.Parse(res.Details);
+        if (res.Ok)
+        {
+            _people = UserDirectory.Parse(res.Details);
+            _peopleRead = true;
+            _peopleProblem = "";
+            return;
+        }
+
+        _peopleRead = false;
+        _peopleProblem = res.Message;
     }
 
     /// <summary>선언한 학교 모양. 명단이 있으면 그것으로 반을 만들고, 없으면 선언 파일 그대로.</summary>
@@ -259,6 +300,7 @@ public sealed class AdminApi
             groups = _inventory.Count,
             teams = _inventory.Count(g => g.IsTeam),
             people = _people.Count,
+            peopleRead = _peopleRead,
             unlicensed = clusters.Where(c => c.Unlicensed).Sum(c => c.Count),
 
             candidates = triaged.Count(t => t.Candidate),
@@ -382,11 +424,19 @@ public sealed class AdminApi
         {
             summary = UserDirectory.Summarize(clusters, _people),
             scanned = _scanned,
+            read = _peopleRead,
+            problem = _peopleProblem,
             hasRoster = _roster is not null,
             rows = _people.Select(p =>
             {
-                var licensed = !p.AccountType.Equals("IneligibleUser", StringComparison.OrdinalIgnoreCase)
-                            && p.LicenseBundle.Length > 0;
+                // 라이선스는 Teams 에만 있다. 팀에 안 붙어 있으면 알 길이 없는데,
+                // 그때 '없음' 이라고 하면 멀쩡한 계정이 죄다 라이선스 없는 것처럼 보이고
+                // 넣기·비밀번호 대상에서 통째로 빠진다. 모르면 모른다고 한다.
+                var unknown = p.AccountType.Length == 0 && p.LicenseBundle.Length == 0;
+
+                var licensed = unknown
+                    || (!p.AccountType.Equals("IneligibleUser", StringComparison.OrdinalIgnoreCase)
+                        && p.LicenseBundle.Length > 0);
 
                 var digits = StudentName.Match(p.DisplayName.Trim());
                 var outsider = UserDirectory.IsOutsider(p);
@@ -395,6 +445,7 @@ public sealed class AdminApi
                 // 학번+이름 표시는 그 자체로 또렷해서 묶음을 못 알아봐도 학생을 가른다.
                 var role = outsider ? "학교 밖"
                     : !licensed ? "라이선스 없음"
+                    : unknown ? (digits.Success ? "학생" : "그 밖")
                     : faculty is { Length: > 0 } && string.Equals(p.LicenseBundle, faculty, StringComparison.Ordinal) ? "교사"
                     : digits.Success ? "학생"
                     : students is { Length: > 0 } && string.Equals(p.LicenseBundle, students, StringComparison.Ordinal) ? "학생"
@@ -418,7 +469,9 @@ public sealed class AdminApi
                     role,
                     grade,
                     classNo,
-                    license = role is "교사" or "학생" ? role : role == "라이선스 없음" ? "없음" : "그 밖",
+                    license = unknown ? "모름"
+                            : role is "교사" or "학생" ? role
+                            : role == "라이선스 없음" ? "없음" : "그 밖",
                     licenseCount = size.TryGetValue(p.LicenseBundle, out var n) ? n : 0,
                     created = p.Created,
                     blocked = p.Blocked,
@@ -558,18 +611,42 @@ public sealed class AdminApi
     /// 이 기능이 통째로 막히므로, 무엇에 동의하는지는 PowerShell 쪽이 미리 적어 흘려보낸다.
     /// </remarks>
     private async Task<bool> EnsureGraphAsync(Job job, CancellationToken ct)
+        => await EnsureGraphAsync(job, PasswordScope, ct).ConfigureAwait(false);
+
+    /// <summary>비밀번호를 바꿀 때 받는 권한. 그것 말고는 아무것도 못 한다.</summary>
+    private const string PasswordScope = "User-PasswordProfile.ReadWrite.All";
+
+    /// <summary>계정을 지울 때 받는 권한. 위의 것으로는 못 지운다.</summary>
+    private const string DeleteScope = "User.ReadWrite.All";
+
+    /// <remarks>
+    /// 권한마다 따로 센다. 비밀번호로 한 번 붙었다고 해서 지울 수 있는 것이 아니고,
+    /// 그때 붙었으니 됐다고 넘겨 버리면 삭제가 <b>권한 없음</b>으로 조용히 실패한다.
+    /// 지우는 쪽은 동의 화면이 한 번 더 뜨는 것이 맞다.
+    /// </remarks>
+    private async Task<bool> EnsureGraphAsync(Job job, string scope, CancellationToken ct)
     {
-        if (_graphReady) return true;
+        if (_graphScopes.Contains(scope)) return true;
 
         var res = await _host.CallAsync("Connect-TeavelGraph",
+            new Dictionary<string, object?> { ["Scopes"] = new[] { scope } },
             timeout: TimeSpan.FromMinutes(20), ct: ct).ConfigureAwait(false);
 
-        if (res.Ok) { _graphReady = true; job.Ok(res.Message); job.Details(res.Details); return true; }
+        if (res.Ok)
+        {
+            _graphScopes.Add(scope);
+            _graphReady = true;
+            job.Ok(res.Message);
+            job.Details(res.Details);
+            return true;
+        }
 
         job.Error(res.Message);
         job.Details(res.Details);
         return false;
     }
+
+    private readonly HashSet<string> _graphScopes = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// 학번을 학년·반·번호로 가르는 형식.
@@ -812,8 +889,6 @@ public sealed class AdminApi
 
         return Started(_jobs.Start($"'{g.DisplayName}' 보관", async (job, jct) =>
         {
-            if (!await EnsureTeamsAsync(job, jct).ConfigureAwait(false)) { job.Finish("팀에 붙지 못했습니다."); return; }
-
             var res = await _host.CallAsync("Rename-TeavelM365Group", new Dictionary<string, object?>
             {
                 ["Identity"] = g.MailNickname,
@@ -1025,8 +1100,9 @@ public sealed class AdminApi
                 _members[id] = res.Ok ? M365Flow.ParseMembers(res.Details) : Array.Empty<TeamMember>();
                 n++;
 
-                if (res.Ok) job.Dim($"{name} — {_members[id].Count}명");
-                else job.Warn($"{name} — {res.Message}");
+                if (res.Ok) { job.Dim($"{name} — {_members[id].Count}명"); continue; }
+
+                job.Warn($"{name} — {res.Message}");
             }
 
             _scanned = true;
@@ -1046,8 +1122,6 @@ public sealed class AdminApi
 
         return Started(_jobs.Start(label.Length > 0 ? label : "구성원 넣기", async (job, jct) =>
         {
-            if (!await EnsureTeamsAsync(job, jct).ConfigureAwait(false)) { job.Finish("팀에 붙지 못했습니다."); return; }
-
             var res = await _host.CallAsync("Add-TeavelTeamMember", new Dictionary<string, object?>
             {
                 ["GroupId"] = groupId,
@@ -1153,8 +1227,6 @@ public sealed class AdminApi
 
         return Started(_jobs.Start(label.Length > 0 ? label : "그룹에 넣기", async (job, jct) =>
         {
-            if (!await EnsureTeamsAsync(job, jct).ConfigureAwait(false)) { job.Finish("팀에 붙지 못했습니다."); return; }
-
             job.Info($"{team?.DisplayName ?? groupId} 에 지금 누가 들어 있는지 봅니다.");
 
             var have = await _host.CallAsync("Get-TeavelTeamMember",
@@ -1220,8 +1292,6 @@ public sealed class AdminApi
 
         return Started(_jobs.Start($"담임 {picks.Count}명 지정", async (job, jct) =>
         {
-            if (!await EnsureTeamsAsync(job, jct).ConfigureAwait(false)) { job.Finish("팀에 붙지 못했습니다."); return; }
-
             var done = 0;
             foreach (var p in picks)
             {
@@ -1241,6 +1311,30 @@ public sealed class AdminApi
             job.Finish($"담임 {done}명을 지정했습니다.");
         }, ct));
     }
+
+    /// <summary>
+    /// 사람 목록을 읽는다.
+    /// </summary>
+    /// <remarks>
+    /// <b>로그인은 더 필요하지 않다.</b> 사람 목록은 Exchange 에서 오고, 그것은 화면이
+    /// 뜰 때 이미 붙어 있다. 사람이 많으면 오래 걸려서 시작할 때 자동으로 하지 않을 뿐이다.
+    /// </remarks>
+    private object StartReadPeople(CancellationToken ct)
+        => Started(_jobs.Start("사람 목록 읽기", async (job, jct) =>
+        {
+            job.Info("학교 사람 목록을 읽습니다. 사람이 많으면 몇 분 걸립니다.");
+            await ReadPeopleAsync(jct).ConfigureAwait(false);
+
+            if (!_peopleRead)
+            {
+                job.Error(_peopleProblem);
+                job.Finish("읽지 못했습니다.");
+                return;
+            }
+
+            job.Ok($"{_people.Count}명을 읽었습니다.");
+            job.Finish($"{_people.Count}명");
+        }, ct));
 
     /// <summary>
     /// 계정을 막거나 푼다.
@@ -1296,6 +1390,68 @@ public sealed class AdminApi
             }
 
             job.Finish(failed == 0 ? $"{done}명을 {what}했습니다." : $"{done}명은 {what}하고 {failed}명은 못 했습니다.");
+        }, ct));
+    }
+
+    /// <summary>
+    /// 계정을 지운다.
+    /// </summary>
+    /// <remarks>
+    /// <b>이 화면에서 가장 되돌리기 어려운 일이다.</b> 메일·과제·파일·원드라이브가 함께
+    /// 사라진다. 30일 안에는 관리 센터에서 되살릴 수 있고, 그 뒤에는 아무도 못 되살린다.
+    /// 그래서 그룹 지우기와 같은 문을 세운다 — 몇 명을 지우는지 <b>숫자를 그대로 적어야</b>
+    /// 실행한다. 단추 하나로 예순 명이 사라지면 안 된다.
+    ///
+    /// <b>한 사람이 막혀도 나머지는 마저 한다</b> — 자기 자신이나 상급 관리자는 못 지우는데,
+    /// 그 계정이 섞였다고 나머지를 못 하면 안 된다.
+    /// </remarks>
+    private object StartRemovePeople(HttpAsk ask, CancellationToken ct)
+    {
+        var body = Body(ask);
+        var upns = Arr(body, "upns");
+        var typed = Str(body, "typed").Trim();
+        var label = Str(body, "label");
+
+        if (upns.Count == 0) return new { ok = false, message = "누구를 지울지 받지 못했습니다." };
+
+        if (typed != upns.Count.ToString(CultureInfo.InvariantCulture))
+            return new { ok = false, message = $"적으신 숫자가 다릅니다. 지우지 않았습니다 — {upns.Count} 을(를) 적어 주세요." };
+
+        var byUpn = _people.ToDictionary(p => p.Upn, p => p.DisplayName, StringComparer.OrdinalIgnoreCase);
+
+        return Started(_jobs.Start(label.Length > 0 ? label : $"계정 지우기 {upns.Count}명", async (job, jct) =>
+        {
+            if (!await EnsureGraphAsync(job, DeleteScope, jct).ConfigureAwait(false))
+            {
+                job.Finish("연결하지 못했습니다.");
+                return;
+            }
+
+            var done = 0;
+            var failed = 0;
+
+            foreach (var upn in upns)
+            {
+                jct.ThrowIfCancellationRequested();
+
+                var res = await _host.CallAsync("Remove-TeavelAccount",
+                    new Dictionary<string, object?> { ["Identity"] = upn },
+                    timeout: TimeSpan.FromMinutes(2), ct: jct).ConfigureAwait(false);
+
+                var name = byUpn.TryGetValue(upn, out var n) && n.Length > 0 ? n : upn;
+
+                if (res.Ok) { job.Ok($"{name} — 지웠습니다."); done++; }
+                else { job.Warn($"{name} — {res.Message}"); failed++; }
+            }
+
+            // 사람 목록이 곧바로 맞아야 한다. 지운 사람이 화면에 남아 있으면
+            // 관리자는 안 지워진 줄 알고 한 번 더 누른다.
+            await ReadPeopleAsync(jct).ConfigureAwait(false);
+
+            if (done > 0)
+                job.Dim("잘못 지우셨으면 30일 안에 관리 센터 › 사용자 › 삭제된 사용자 에서 되살리실 수 있습니다.");
+
+            job.Finish(failed == 0 ? $"{done}명을 지웠습니다." : $"{done}명은 지우고 {failed}명은 못 지웠습니다.");
         }, ct));
     }
 
@@ -1426,19 +1582,32 @@ public sealed class AdminApi
     /// </remarks>
     private async Task<bool> EnsureTeamsAsync(Job job, CancellationToken ct)
     {
-        if (_teamsReady) return true;
+        if (_teamsReady) { job.Dim("팀에 이미 붙어 있는 것으로 보고 넘어갑니다."); return true; }
 
-        job.Info("팀 작업을 위해 로그인이 한 번 더 필요합니다. 로그인 창이 따로 뜹니다.");
+        job.Info("팀 작업을 위해 로그인이 한 번 더 필요합니다.");
+        job.Info("창은 저절로 뜨지 않습니다 — 아래에 나오는 주소와 코드를 인터넷 창에 직접 넣으셔야 합니다.");
 
         var res = await _host.CallAsync("Connect-TeavelM365",
             new Dictionary<string, object?> { ["TeamsToo"] = true },
             timeout: TimeSpan.FromMinutes(20), ct: ct).ConfigureAwait(false);
 
-        if (res.Ok) { _teamsReady = true; job.Ok(res.Message); return true; }
+        if (!res.Ok)
+        {
+            job.Error(res.Message);
+            job.Details(res.Details);
+            return false;
+        }
 
-        job.Error(res.Message);
+        job.Ok(res.Message);
+
+        // 연결이 무슨 상태였는지 묻히지 않게 앞으로 끌어낸다.
+        //
+        // 예전에는 이 줄들을 아예 안 찍었다. 그래서 '팀: 이미 연결돼 있었습니다' 인데 정작
+        // 팀 작업이 전부 터지는 것을 보고도, <b>무엇이 그렇게 판단했는지 알 수가 없었다.</b>
         job.Details(res.Details);
-        return false;
+
+        _teamsReady = true;
+        return true;
     }
 
     // ───────────────────────────── 잔손 ─────────────────────────────

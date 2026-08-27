@@ -8,12 +8,15 @@
 
 Set-StrictMode -Version Latest
 
+$script:TeamsOn = $false
+
 function Connect-MicrosoftTeams {
     param($AccountId, $ErrorAction)
+    $script:TeamsOn = $true
     Write-Host '  (가짜) 팀에 로그인됨'
 }
 
-function Disconnect-MicrosoftTeams { param([switch] $Confirm, $ErrorAction) }
+function Disconnect-MicrosoftTeams { param([switch] $Confirm, $ErrorAction) $script:TeamsOn = $false }
 
 function New-Team {
     param($DisplayName, $MailNickName, $Visibility, $Description, $Template, $Owner, $ErrorAction)
@@ -98,8 +101,19 @@ function New-FakePerson {
     }
 }
 
+<#
+    진짜는 Connect-MicrosoftTeams 전에는 아무것도 주지 않는다.
+
+    가짜가 그것을 안 따졌더니, 화면이 팀에 붙기도 전에 사람 목록을 읽으려 하는 것을
+    <b>여기서 못 잡고 실기에서 만났다</b> — 구성원 화면이 아무 말 없이 텅 비었다(2026-08-27).
+    가짜는 진짜만큼 까다로워야 한다.
+#>
 function Get-CsOnlineUser {
     param($Identity, $ResultSize, $Filter, $Properties, $AccountType, $ErrorAction)
+
+    if (-not $script:TeamsOn) {
+        throw 'Run Connect-MicrosoftTeams before running cmdlets.'
+    }
 
     $people = New-Object System.Collections.Generic.List[object]
 
@@ -183,7 +197,18 @@ function Remove-TeamUser {
 }
 
 function Get-Team { param($ErrorAction) @() }
-function Get-CsTenant { param($ErrorAction) [pscustomobject]@{ DisplayName = '가짜 학교' } }
+<#
+    붙었는지 가르는 자리다. Connect-TeavelM365 가 이것으로 '이미 붙어 있나' 를 본다.
+
+    가짜가 늘 성공했더니 <b>붙지도 않았는데 붙은 줄 알고</b> Connect-MicrosoftTeams 를
+    건너뛰었다. 그다음 Get-CsOnlineUser 가 거절해 구성원 목록이 비었다.
+    진짜는 붙기 전에는 이것도 안 준다.
+#>
+function Get-CsTenant {
+    param($ErrorAction)
+    if (-not $script:TeamsOn) { throw 'Run Connect-MicrosoftTeams before running cmdlets.' }
+    [pscustomobject]@{ DisplayName = '가짜 학교' }
+}
 
 Export-ModuleMember -Function Connect-MicrosoftTeams, Disconnect-MicrosoftTeams,
     New-Team, New-TeamChannel, Get-TeamChannel, Add-TeamUser, Get-TeamUser, Remove-TeamUser, Get-Team, Get-CsTenant,

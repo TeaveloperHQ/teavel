@@ -460,7 +460,7 @@ function Connect-TeavelM365 {
     $teamsOk = $null
     if ($TeamsToo) {
         Import-Module MicrosoftTeams -ErrorAction Stop
-        try { $null = Get-CsTenant -ErrorAction Stop; $teamsOk = $true } catch { $teamsOk = $false }
+        $teamsOk = Test-TeavelTeamsReady
         if (-not $teamsOk) {
             Write-Host ''
             Write-Host '  팀 작업을 위해 한 번 더 로그인 창이 열립니다. 같은 계정으로 하시면 됩니다.'
@@ -469,29 +469,68 @@ function Connect-TeavelM365 {
             if ($Account) { $p['AccountId'] = $Account }
             if ((Get-Command Connect-MicrosoftTeams).Parameters.ContainsKey('DisableWAM')) { $p['DisableWAM'] = $true }
 
-            # 창 방식(브라우저)을 쓰지 않는다.
+            # ── 두 길을 차례로 해 본다 ──
             #
-            # 이 상주 세션에는 창이 없어서, 로그인을 마친 브라우저가 돌아올 곳이 없다.
-            # 실기에서 두 가지로 나타났다(2026-08-17):
+            # 창 방식(브라우저)은 이 상주 세션에 창이 없어서 실패하는 판이 있다(2026-08-17):
             #   · 창이 아예 안 뜨고 'A window handle must be configured'
             #   · 창은 떠서 로그인까지 했는데 'AADSTS900561 — GET 요청을 받았습니다'
-            # 뒤엣것이 특히 고약하다. 로그인을 다 하고 나서 실패하므로,
-            # 관리자는 자기가 무엇을 잘못했는지 알 수 없다.
             #
-            # 코드 방식은 창이 필요 없다. 화면에 주소와 코드가 나오고 사람이 아무 기기에서나
-            # 넣으면 된다. 손이 한 번 더 가지만 반드시 된다 — 되는 길로 간다.
-            $byCode = $false
-            foreach ($name in 'UseDeviceAuthentication', 'DeviceCode', 'Device') {
-                if ((Get-Command Connect-MicrosoftTeams).Parameters.ContainsKey($name)) { $byCode = $true; break }
+            # 그래서 한동안 코드 방식만 썼다. 그런데 코드 방식도 반드시 되는 길이 아니었다.
+            # 학교 테넌트가 조건부 액세스로 <b>코드 방식 자체를 막아</b> 둘 수 있다(2026-08-27):
+            #
+            #     로그인에 성공했지만 이 리소스에 액세스하기 위한 조건을 충족하지 않습니다.
+            #     ... 관리자가 제한하는 브라우저, 앱, 위치 또는 <b>인증 흐름</b>에서 ...
+            #
+            # 어느 쪽이 막혔는지는 테넌트마다 다르고 우리가 미리 알 수 없다.
+            # 그러니 짐작하지 말고 <b>둘 다 해 본다.</b> 창 방식이 먼저인 것은,
+            # 되기만 하면 그쪽이 손이 덜 가기 때문이다.
+            $tries = New-Object System.Collections.Generic.List[string]
+
+            try {
+                Connect-MicrosoftTeams @p -ErrorAction Stop | Out-Null
+            }
+            catch {
+                $tries.Add('창 방식: ' + $_.Exception.Message)
             }
 
-            if ($byCode) {
-                Write-TeavelDeviceLoginNotice
-                Connect-TeavelTeamsByCode -Account $Account
+            if (-not (Test-TeavelTeamsReady)) {
+                $byCode = $false
+                foreach ($name in 'UseDeviceAuthentication', 'DeviceCode', 'Device') {
+                    if ((Get-Command Connect-MicrosoftTeams).Parameters.ContainsKey($name)) { $byCode = $true; break }
+                }
+
+                if ($byCode) {
+                    Write-Host ''
+                    Write-Host '  창 방식으로는 안 됐습니다. 코드 방식으로 해 보겠습니다.'
+                    Write-TeavelDeviceLoginNotice
+                    try { Connect-TeavelTeamsByCode -Account $Account }
+                    catch { $tries.Add('코드 방식: ' + $_.Exception.Message) }
+                }
             }
+
+            # 붙었는지 반드시 다시 본다.
+            #
+            # 연결 명령이 <b>조용히 돌아오는 판</b>이 있다. 그러면 여기서는 성공으로 보고하고,
+            # 그 뒤의 팀 작업이 하나도 빠짐없이
+            # 'You must call the Connect-MicrosoftTeams cmdlet before calling any other cmdlets'
+            # 로 터진다. 관리자는 방금 '연결했습니다' 를 봤으므로 무엇이 잘못됐는지 알 수 없다.
+            # 실기에서 그랬다(2026-08-27).
+            if (Test-TeavelTeamsReady) { $teamsOk = $true }
             else {
-                # 코드 방식을 지원하지 않는 판이면 창 방식이라도 해 본다.
-                Connect-MicrosoftTeams @p -ErrorAction Stop | Out-Null
+                $why = @($tries) -join ' / '
+
+                # 조건부 액세스에 막힌 것이면 그렇게 말해야 한다.
+                # '로그인을 다시 해 보세요' 라고 하면 될 때까지 다시 하시다가 시간만 버린다.
+                $blocked = $why -match 'AADSTS53003|AADSTS500011|Conditional Access|액세스 권한이 없습니다|인증 흐름'
+
+                if ($blocked) {
+                    throw ('학교 정책이 이 로그인을 막고 있습니다. 다시 시도하셔도 같습니다.' + "`n" +
+                           '팀을 <b>만드는 것</b>만 이 로그인이 필요합니다 — 구성원 읽기·그룹에 넣기는 그대로 됩니다.' + "`n" +
+                           '팀 만들기는 정식 관리 센터나 Teams 앱에서 하시고, 사람 넣기는 여기서 하시면 됩니다.' + "`n" +
+                           '까닭: ' + $why)
+                }
+
+                throw ('팀에 붙지 못했습니다. ' + $why)
             }
         }
     }
@@ -692,6 +731,34 @@ function Write-TeavelDeviceLoginNotice {
 
     매개변수 이름이 판마다 다르므로 받을 수 있는 것을 찾아 쓴다.
 #>
+<#
+    팀 cmdlet 을 지금 쓸 수 있는지 본다.
+
+    <b>Get-CsTenant 로 보면 안 된다.</b> 그쪽은 Cs* 계열이라 Team* 계열이 못 쓰는
+    상태에서도 성공한다. 실기에서 그래서 '팀: 연결했습니다' 라고 해 놓고, 그다음
+    팀 작업이 하나도 빠짐없이
+    'You must call the Connect-MicrosoftTeams cmdlet before calling any other cmdlets'
+    로 터졌다(2026-08-27).
+
+    그래서 <b>우리가 실제로 부르는 것</b>으로 본다. 없는 별칭을 물어보므로 테넌트가 커도 빠르고,
+    '못 찾았다' 는 답은 곧 '붙어 있다' 는 뜻이다.
+#>
+function Test-TeavelTeamsReady {
+    param()
+
+    try {
+        $null = Get-Team -MailNickName 'teavel-probe-none' -ErrorAction Stop
+        return $true
+    }
+    catch {
+        if ([string]$_.Exception.Message -match 'Connect-MicrosoftTeams') { return $false }
+
+        # 다른 까닭이면 붙어 있는 것으로 본다. 진짜 문제라면 실제 작업에서
+        # 그 자리의 말로 터지고, 그게 여기서 짐작한 말보다 낫다.
+        return $true
+    }
+}
+
 function Connect-TeavelTeamsByCode {
     param(
         [string] $Account
@@ -738,108 +805,110 @@ function Connect-TeavelTeamsByCode {
     한 줄이 이렇게 나간다:
         USER<tab>UPN<tab>이름<tab>부서<tab>계정종류<tab>라이선스꾸러미
 #>
+<#
+    학교 사람 목록.
+
+    ■ Exchange 로 읽는다
+
+    예전에는 Get-CsOnlineUser(Teams)로 읽었다. 그런데 화면은 메일·그룹(Exchange)만 붙은 채
+    뜨므로, 구성원을 한 번 보려고 <b>코드 방식 로그인을 한 번 더</b> 해야 했다.
+    실기에서 그 자리에서 멈췄다 — 창이 뜨는 줄 알고 기다리셨다(2026-08-27).
+
+    Get-User 가 필요한 것을 다 준다(실측): UserPrincipalName · DisplayName · Department ·
+    WhenCreated · AccountDisabled. 그러면 두 번째 로그인 없이 명부가 채워진다.
+
+    ■ 라이선스만 Teams 에 있다
+
+    AssignedPlan 은 Exchange 에 없다. 그래서 <b>이미 붙어 있을 때만</b> 채우고, 아니면 비운다.
+    비면 화면이 '모름' 이라고 말한다 — 없는 것으로 단정하지 않는다.
+    교사·학생 가르기는 표시 이름의 학번으로도 되므로 명부는 그대로 쓸 만하다.
+#>
 function Get-TeavelTenantUser {
     param(
         [int] $Limit = 5000
     )
 
-    Import-Module MicrosoftTeams -ErrorAction Stop
+    Import-Module ExchangeOnlineManagement -ErrorAction Stop
 
-    $users = @(Get-CsOnlineUser -ResultSize $Limit -ErrorAction Stop)
-
-    $d = New-Object System.Collections.Generic.List[string]
     $rows = New-Object System.Collections.Generic.List[object]
 
-    foreach ($u in $users) {
+    foreach ($e in @(Get-User -ResultSize Unlimited -ErrorAction Stop)) {
         $upn = ''
-        try { $upn = [string]$u.UserPrincipalName } catch { }
+        try { $upn = [string]$e.UserPrincipalName } catch { }
         if (-not $upn) { continue }
 
         $name = ''
-        try { $name = [string]$u.DisplayName } catch { }
+        try { $name = [string]$e.DisplayName } catch { }
 
         $dept = ''
-        try { if ($u.PSObject.Properties['Department']) { $dept = [string]$u.Department } } catch { }
-
-        # 라이선스가 없는 계정은 IneligibleUser 로 온다 — 팀에 넣어도 못 쓴다.
-        $kind = ''
-        try { if ($u.PSObject.Properties['AccountType']) { $kind = [string]$u.AccountType } } catch { }
-
-        # AssignedPlan 의 모양은 판마다 달라졌다(XML → JSON). 어느 쪽이든 이름만 뽑아 쓴다.
-        # 못 뽑으면 빈 꾸러미가 되는데, 그러면 그 사람들끼리 한 묶음이 되어 눈에 띈다 —
-        # 조용히 엉뚱한 묶음에 섞이는 것보다 낫다.
-        $caps = New-Object System.Collections.Generic.List[string]
-        try {
-            foreach ($p in @($u.AssignedPlan)) {
-                if (-not $p) { continue }
-                $c = $null
-                if ($p.PSObject.Properties['Capability'])        { $c = $p.Capability }
-                elseif ($p.PSObject.Properties['ServicePlanId']) { $c = $p.ServicePlanId }
-                else                                             { $c = [string]$p }
-
-                # 꺼져 있는 플랜은 빼야 같은 라이선스끼리 같은 꾸러미가 된다.
-                if ($p.PSObject.Properties['CapabilityStatus'] -and
-                    $p.CapabilityStatus -and [string]$p.CapabilityStatus -ne 'Enabled') { continue }
-
-                if ($c) { $caps.Add([string]$c) }
-            }
-        } catch { }
-
-        $bundle = (($caps | Sort-Object -Unique) -join ',')
+        try { if ($e.PSObject.Properties['Department']) { $dept = [string]$e.Department } } catch { }
 
         $made = ''
-        try {
-            if ($u.PSObject.Properties['WhenCreated'] -and $u.WhenCreated) {
-                $made = ([datetime]$u.WhenCreated).ToString('yyyy-MM-dd')
-            }
-        } catch { }
+        try { if ($e.WhenCreated) { $made = ([datetime]$e.WhenCreated).ToString('yyyy-MM-dd') } } catch { }
 
-        # 차단된 계정인지. 모르면 빈 칸으로 둔다 — '아니다' 로 단정하면
-        # 이미 막아 둔 졸업생이 멀쩡한 계정으로 보인다.
+        # 모르면 빈 칸으로 둔다 — '아니다' 로 단정하면 이미 막아 둔 졸업생이 멀쩡해 보인다.
         $blocked = ''
         try {
-            if ($u.PSObject.Properties['AccountEnabled'] -and $null -ne $u.AccountEnabled) {
-                $blocked = $(if ($u.AccountEnabled) { '0' } else { '1' })
+            if ($e.PSObject.Properties['AccountDisabled'] -and $null -ne $e.AccountDisabled) {
+                $blocked = $(if ($e.AccountDisabled) { '1' } else { '0' })
             }
         } catch { }
 
         $rows.Add([pscustomobject]@{
-            Upn = $upn; Name = $name; Dept = $dept; Kind = $kind
-            Bundle = $bundle; Made = $made; Blocked = $blocked
+            Upn = $upn; Name = $name; Dept = $dept; Kind = ''
+            Bundle = ''; Made = $made; Blocked = $blocked
         })
     }
 
-    # 만든 날은 Get-CsOnlineUser 가 줄 때도 있고 안 줄 때도 있다 — 판마다 달랐다.
-    # 하나도 못 받았으면 Exchange 쪽에서 한 번에 받아 아이디로 맞춘다.
-    # 못 받아도 그만이다. 그 칸만 비고 나머지는 그대로 쓴다.
-    if (-not ($rows | Where-Object { $_.Made -and $_.Blocked })) {
-        try {
-            Import-Module ExchangeOnlineManagement -ErrorAction Stop
-            $when = @{}
-            $off  = @{}
-            foreach ($e in @(Get-User -ResultSize Unlimited -ErrorAction Stop)) {
-                $id = ''
-                try { $id = [string]$e.UserPrincipalName } catch { }
-                if (-not $id) { continue }
-                try { if ($e.WhenCreated) { $when[$id] = ([datetime]$e.WhenCreated).ToString('yyyy-MM-dd') } } catch { }
-                try {
-                    if ($e.PSObject.Properties['AccountDisabled'] -and $null -ne $e.AccountDisabled) {
-                        $off[$id] = $(if ($e.AccountDisabled) { '1' } else { '0' })
-                    }
-                } catch { }
-            }
-            foreach ($r in $rows) {
-                if (-not $r.Made -and $when.ContainsKey($r.Upn)) { $r.Made = $when[$r.Upn] }
-                if (-not $r.Blocked -and $off.ContainsKey($r.Upn)) { $r.Blocked = $off[$r.Upn] }
-            }
-        } catch { }
+    # 라이선스는 Teams 에만 있다. 붙어 있을 때만 얹는다 — 이것 때문에 로그인을 시키지 않는다.
+    try {
+        Import-Module MicrosoftTeams -ErrorAction Stop
+        $null = Get-CsTenant -ErrorAction Stop
+
+        $plan = @{}
+        $kind = @{}
+        foreach ($u in @(Get-CsOnlineUser -ResultSize $Limit -ErrorAction Stop)) {
+            $id = ''
+            try { $id = [string]$u.UserPrincipalName } catch { }
+            if (-not $id) { continue }
+
+            try { if ($u.PSObject.Properties['AccountType']) { $kind[$id] = [string]$u.AccountType } } catch { }
+
+            # AssignedPlan 의 모양은 판마다 달라졌다(XML → JSON). 어느 쪽이든 이름만 뽑아 쓴다.
+            $caps = New-Object System.Collections.Generic.List[string]
+            try {
+                foreach ($x in @($u.AssignedPlan)) {
+                    if (-not $x) { continue }
+                    $c = $null
+                    if ($x.PSObject.Properties['Capability'])        { $c = $x.Capability }
+                    elseif ($x.PSObject.Properties['ServicePlanId']) { $c = $x.ServicePlanId }
+                    else                                              { $c = [string]$x }
+
+                    # 꺼져 있는 플랜은 빼야 같은 라이선스끼리 같은 꾸러미가 된다.
+                    if ($x.PSObject.Properties['CapabilityStatus'] -and
+                        $x.CapabilityStatus -and [string]$x.CapabilityStatus -ne 'Enabled') { continue }
+
+                    if ($c) { $caps.Add([string]$c) }
+                }
+            } catch { }
+
+            $plan[$id] = (($caps | Sort-Object -Unique) -join ',')
+        }
+
+        foreach ($r in $rows) {
+            if ($plan.ContainsKey($r.Upn)) { $r.Bundle = $plan[$r.Upn] }
+            if ($kind.ContainsKey($r.Upn)) { $r.Kind   = $kind[$r.Upn] }
+        }
+    } catch {
+        # 팀에 안 붙어 있다. 명부는 그대로 쓰고 라이선스 칸만 빈다.
     }
 
+    $d = New-Object System.Collections.Generic.List[string]
     foreach ($r in $rows) {
         $d.Add(("USER`t{0}`t{1}`t{2}`t{3}`t{4}`t{5}`t{6}" -f $r.Upn, $r.Name, $r.Dept, $r.Kind, $r.Bundle, $r.Made, $r.Blocked))
     }
 
-    New-TeavelResult -Message "사람 $($users.Count)명을 읽었습니다." -Details $d
+    New-TeavelResult -Message "사람 $($rows.Count)명을 읽었습니다." -Details $d
 }
 
 <#
@@ -996,30 +1065,76 @@ function Sync-TeavelTeamChannel {
     한 줄이 이렇게 나간다:
         MEMBER<tab>UPN<tab>역할
 #>
+<#
+    그룹에서 사람의 로그인 아이디를 꺼낸다.
+
+    Get-UnifiedGroupLinks 가 주는 것은 받는 사람 개체라, 판마다 들고 있는 칸이 조금씩
+    다르다. WindowsLiveID 가 로그인 아이디이지만 없는 판이 있고 그때는 대표 메일 주소가
+    같은 값이다. 짐작하지 말고 있는 것부터 차례로 본다.
+#>
+function Get-TeavelLinkUpn {
+    param($Recipient)
+
+    foreach ($field in 'WindowsLiveID', 'UserPrincipalName', 'PrimarySmtpAddress') {
+        $v = ''
+        try { $v = [string]$Recipient.$field } catch { }
+        if ($v -and $v.Contains('@')) { return $v }
+    }
+    ''
+}
+
+<#
+.SYNOPSIS
+    팀에 누가 들어 있는지 읽는다. <b>팀에 붙지 않고</b> 읽는다.
+.DESCRIPTION
+    팀 구성원은 그 팀을 받치는 M365 그룹의 구성원이다 — 같은 것을 Teams 가 자기 말로
+    보여 줄 뿐이다. 그래서 이미 붙어 있는 Exchange 로 그대로 읽을 수 있다.
+
+    전에는 Get-TeamUser 를 썼고, 그것 하나 때문에 로그인을 한 번 더 시켰다.
+    그 두 번째 로그인은 창이 없어 코드 방식으로 갔는데, 학교 테넌트가 조건부 액세스로
+    <b>코드 방식 자체를 막아</b> 두어 통째로 막혔다(2026-08-27).
+
+        로그인에 성공했지만 이 리소스에 액세스하기 위한 조건을 충족하지 않습니다.
+        ... 관리자가 제한하는 브라우저, 앱, 위치 또는 <b>인증 흐름</b>에서 ...
+
+    Exchange 로 읽으면 그 문이 아예 필요 없다. 로그인은 한 번으로 끝난다 —
+    원래 그래야 하는 것이었다.
+#>
 function Get-TeavelTeamMember {
     param(
         [Parameter(Mandatory)][string] $GroupId
     )
 
-    Import-Module MicrosoftTeams -ErrorAction Stop
+    # 소유자를 못 읽어도 구성원은 읽어야 한다. 역할이 덜 정확할 뿐 목록은 나온다.
+    $owners = @()
+    try { $owners = @(Get-UnifiedGroupLinks -Identity $GroupId -LinkType Owners -ResultSize Unlimited -ErrorAction Stop) }
+    catch { }
 
-    $users = @(Get-TeamUser -GroupId $GroupId -ErrorAction Stop)
+    $members = @(Get-UnifiedGroupLinks -Identity $GroupId -LinkType Members -ResultSize Unlimited -ErrorAction Stop)
+
+    $ownerSet = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($o in $owners) {
+        $u = Get-TeavelLinkUpn $o
+        if ($u) { $null = $ownerSet.Add($u) }
+    }
 
     $d = New-Object System.Collections.Generic.List[string]
-    $rows = New-Object System.Collections.Generic.List[object]
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
 
-    foreach ($u in $users) {
-        $upn = ''
-        try { $upn = [string]$u.User } catch { }
+    foreach ($m in $members) {
+        $upn = Get-TeavelLinkUpn $m
         if (-not $upn) { continue }
-
-        $role = ''
-        try { $role = [string]$u.Role } catch { }
-
+        if (-not $seen.Add($upn)) { continue }
+        $role = if ($ownerSet.Contains($upn)) { 'Owner' } else { 'Member' }
         $d.Add(("MEMBER`t{0}`t{1}" -f $upn, $role))
     }
 
-    New-TeavelResult -Message "$($users.Count)명이 들어 있습니다." -Details $d
+    # 소유자인데 구성원 목록에는 없을 수 있다. 팀에서는 보이므로 함께 센다.
+    foreach ($u in $ownerSet) {
+        if ($seen.Add($u)) { $d.Add(("MEMBER`t{0}`tOwner" -f $u)) }
+    }
+
+    New-TeavelResult -Message "$($seen.Count)명이 들어 있습니다." -Details $d
 }
 
 <#
@@ -1045,7 +1160,9 @@ function Add-TeavelTeamMember {
         [ValidateSet('Member', 'Owner')][string] $Role = 'Member'
     )
 
-    Import-Module MicrosoftTeams -ErrorAction Stop
+    # 팀에 붙지 않고 넣는다. 팀 구성원은 그 팀을 받치는 M365 그룹의 구성원이라
+    # 이미 붙어 있는 Exchange 로 그대로 넣을 수 있다. Get-TeavelTeamMember 와 같은 까닭이다.
+    $link = if ($Role -eq 'Owner') { 'Owners' } else { 'Members' }
 
     $done   = New-Object System.Collections.Generic.List[string]
     $failed = New-Object System.Collections.Generic.List[string]
@@ -1053,9 +1170,20 @@ function Add-TeavelTeamMember {
     foreach ($u in $Users) {
         if (-not $u) { continue }
         try {
-            Invoke-TeavelWrite -Command 'Add-TeamUser' -Arguments @{
-                GroupId = $GroupId; User = $u; Role = $Role
+            Invoke-TeavelWrite -Command 'Add-UnifiedGroupLinks' -Arguments @{
+                Identity = $GroupId; LinkType = $link; Links = $u
             } | Out-Null
+
+            # 소유자는 구성원이기도 해야 한다. 진짜 Teams 가 그렇게 만든다 —
+            # 소유자로만 넣으면 팀 목록에 안 보이는 판이 있다.
+            if ($Role -eq 'Owner') {
+                try {
+                    Invoke-TeavelWrite -Command 'Add-UnifiedGroupLinks' -Arguments @{
+                        Identity = $GroupId; LinkType = 'Members'; Links = $u
+                    } | Out-Null
+                } catch { }
+            }
+
             $done.Add($u)
         }
         catch {
@@ -1092,25 +1220,25 @@ function Remove-TeavelTeamStudent {
         [string[]] $Keep = @()
     )
 
-    Import-Module MicrosoftTeams -ErrorAction Stop
+    # 팀에 붙지 않고 뺀다 — Get-TeavelTeamMember 와 같은 까닭이다.
+    $owners = @()
+    try { $owners = @(Get-UnifiedGroupLinks -Identity $GroupId -LinkType Owners -ResultSize Unlimited -ErrorAction Stop |
+                        ForEach-Object { Get-TeavelLinkUpn $_ } | Where-Object { $_ }) }
+    catch { }
 
-    $all = @(Get-TeamUser -GroupId $GroupId -ErrorAction Stop)
+    $members = @(Get-UnifiedGroupLinks -Identity $GroupId -LinkType Members -ResultSize Unlimited -ErrorAction Stop |
+                    ForEach-Object { Get-TeavelLinkUpn $_ } | Where-Object { $_ })
 
-    $owners = @($all | Where-Object { [string]$_.Role -eq 'Owner' } | ForEach-Object { [string]$_.User })
     $keepSet = @($owners + $Keep | Where-Object { $_ })
-
-    $targets = @($all |
-        Where-Object { [string]$_.Role -ne 'Owner' } |
-        ForEach-Object { [string]$_.User } |
-        Where-Object { $keepSet -notcontains $_ })
+    $targets = @($members | Where-Object { $keepSet -notcontains $_ })
 
     $done   = New-Object System.Collections.Generic.List[string]
     $failed = New-Object System.Collections.Generic.List[string]
 
     foreach ($u in $targets) {
         try {
-            Invoke-TeavelWrite -Command 'Remove-TeamUser' -Arguments @{
-                GroupId = $GroupId; User = $u; Role = 'Member'
+            Invoke-TeavelWrite -Command 'Remove-UnifiedGroupLinks' -Arguments @{
+                Identity = $GroupId; LinkType = 'Members'; Links = $u
             } | Out-Null
             $done.Add($u)
         }
@@ -1440,18 +1568,39 @@ function Connect-TeavelGraph {
     # ── 멈추기 전에 먼저 말한다 ──
     # 이 로그인은 앞의 둘과 다르다. 처음 보는 동의 화면이 뜨고, 거기서 관리자가
     # 겁을 먹고 [취소] 를 누르면 이 기능이 통째로 막힌다. 무엇에 동의하는지 미리 적는다.
+    #
+    # 그리고 무엇에 쓰는 권한이냐에 따라 적히는 말이 달라야 한다. 비밀번호를 바꿀 때와
+    # 계정을 지울 때는 동의 화면에 뜨는 권한 이름부터 다르다. 안내가 실제 화면과
+    # 다르면 관리자는 '내가 뭘 잘못 눌렀나' 하고 [취소] 를 누른다.
+    $wide = $Scopes -contains 'User.ReadWrite.All'
+
+    if ($wide) {
+        $head  = '계정을 지우려면 권한을 한 번 허용해야 합니다'
+        $shown = '사용자 읽기/쓰기 (User.ReadWrite.All)'
+        $note  = @(
+            '  이 허용은 비밀번호를 바꿀 때 쓰던 것보다 넓습니다 — 계정을 지울 수 있기 때문입니다.',
+            '  지운 계정은 30일 안에는 관리 센터에서 되살릴 수 있고, 그 뒤에는 되살릴 수 없습니다.'
+        )
+    }
+    else {
+        $head  = '비밀번호를 바꾸려면 권한을 한 번 허용해야 합니다'
+        $shown = '사용자 비밀번호 프로필 읽기/쓰기'
+        $note  = @(
+            '  이 허용은 비밀번호를 바꾸는 것 말고는 아무것도 못 합니다.'
+        )
+    }
+
     Write-Host ''
-    Write-Host '  ┌─────────────────────────────────────────────────┐'
-    Write-Host '  │  비밀번호를 바꾸려면 권한을 한 번 허용해야 합니다 │'
-    Write-Host '  └─────────────────────────────────────────────────┘'
+    Write-Host ('  ' + $head)
+    Write-Host '  ─────────────────────────────────────────────'
     Write-Host ''
     Write-Host '  ① 인터넷 창이 열리고 학교 계정으로 로그인합니다'
     Write-Host '  ② "요청한 권한" 화면이 나옵니다'
-    Write-Host '  ③ 적혀 있는 것은 하나입니다 — 사용자 비밀번호 프로필 읽기/쓰기'
+    Write-Host ('  ③ 적혀 있는 것은 하나입니다 — ' + $shown)
     Write-Host '  ④ [수락] 을 누릅니다'
     Write-Host ''
-    Write-Host '  이 허용은 비밀번호를 바꾸는 것 말고는 아무것도 못 합니다.'
-    Write-Host '  그리고 관리자 권한이 없는 선생님은 이 허용이 있어도 남의 비밀번호를 못 바꿉니다.'
+    foreach ($n in $note) { Write-Host $n }
+    Write-Host '  관리자 권한이 없는 선생님은 이 허용이 있어도 남의 계정을 건드리지 못합니다.'
     Write-Host ''
     Write-Host '  기다리는 중…'
     Write-Host ''
@@ -1467,6 +1616,40 @@ function Connect-TeavelGraph {
     }
 
     New-TeavelResult -Message '연결했습니다.' -Details @("계정: $($ctx.Account)")
+}
+
+<#
+    계정을 지운다.
+
+    <b>되돌릴 수 없는 일에 가장 가깝다.</b> 메일·과제·파일·원드라이브가 함께 사라진다.
+    30일 안에는 관리 센터에서 되살릴 수 있지만, 그 뒤에는 아무도 못 되살린다.
+
+    권한이 비밀번호보다 넓다 — User.ReadWrite.All 이다. 비밀번호만 바꿀 때 쓰던
+    User-PasswordProfile.ReadWrite.All 로는 지울 수 없다. 넓어지는 만큼 화면이
+    그것을 분명히 말해야 한다.
+#>
+function Remove-TeavelAccount {
+    param(
+        [Parameter(Mandatory)][string] $Identity
+    )
+
+    Import-Module Microsoft.Graph.Users -ErrorAction Stop
+
+    # 자기 자신을 지우면 그 자리에서 관리 화면도, 되돌릴 사람도 함께 사라진다.
+    $me = ''
+    try {
+        Import-Module ExchangeOnlineManagement -ErrorAction SilentlyContinue
+        $conn = @(Get-ConnectionInformation -ErrorAction Stop)
+        if ($conn.Count -gt 0) { $me = [string]$conn[0].UserPrincipalName }
+    } catch { }
+
+    if ($me -and $me -eq $Identity) {
+        throw '지금 로그인하신 계정입니다. 자기 자신은 지울 수 없습니다.'
+    }
+
+    Invoke-TeavelWrite -Command 'Remove-MgUser' -Arguments @{ UserId = $Identity }
+
+    New-TeavelResult -Message "$Identity — 지웠습니다." -Details @()
 }
 
 function Reset-TeavelPassword {
@@ -1535,11 +1718,12 @@ Export-ModuleMember -Function `
     Test-TeavelUnderOneDrive, Get-TeavelStudentId, Get-TeavelCohort, `
     Get-TeavelModuleDirectory, Add-TeavelModulePath, Get-TeavelM365Readiness, Install-TeavelM365Module, `
     Install-TeavelModuleFromGallery, Connect-TeavelM365, Invoke-TeavelWrite, `
-    Connect-TeavelTeamsByCode, `
+    Connect-TeavelTeamsByCode, Test-TeavelTeamsReady, `
     Get-TeavelM365Inventory, Get-TeavelTenantUser, `
     Get-TeavelUserName, Set-TeavelDisplayName, `
     New-TeavelM365Group, Sync-TeavelTeamChannel, `
     Get-TeavelTeamMember, Add-TeavelTeamMember, Remove-TeavelTeamStudent, `
     Rename-TeavelM365Group, Remove-TeavelM365Group, `
     Get-TeavelGraphReadiness, Install-TeavelGraphModule, Connect-TeavelGraph, Reset-TeavelPassword, `
+    Remove-TeavelAccount, `
     Set-TeavelAccountBlocked

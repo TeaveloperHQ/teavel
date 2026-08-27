@@ -176,6 +176,23 @@ function Remove-UnifiedGroup {
 #>
 $script:People = @{}
 $script:Blocked = @{}
+<#
+    지운 사람. 지웠는데 Get-User 가 다시 만들어 주면 시험이 거짓말을 한다 —
+    화면에서는 사라졌다가 다음에 물어보면 되살아난다. 무덤을 따로 둔다.
+#>
+$script:Gone = @{}
+
+<#
+    가짜 Remove-MgUser 가 부른다. 진짜에서는 Graph 로 지운 사람이 Exchange 에서도
+    사라지므로, 여기서도 두 곳이 함께 맞아야 한다.
+#>
+function Remove-TeavelFakeUser {
+    param([Parameter(Mandatory)][string] $Identity)
+    $null = $script:People.Remove($Identity)
+    $null = $script:Blocked.Remove($Identity)
+    $script:Gone[$Identity] = $true
+}
+
 function Get-User {
     param($Identity, $ResultSize, $ErrorAction)
     if ($script:People.Count -eq 0) {
@@ -200,6 +217,7 @@ function Get-User {
         # 진짜 테넌트에서는 Get-CsOnlineUser 가 준 사람이면 Exchange 에도 다 있다.
         # 여기 씨앗은 이름 붙이기 시험용 몇 명뿐이라, 나머지는 물어볼 때 만들어 준다 —
         # 그러지 않으면 학생을 막아 보는 시험이 '그런 사람이 없습니다' 로만 끝난다.
+        if ($script:Gone.ContainsKey($Identity)) { throw "그런 사람이 없습니다: $Identity" }
         if (-not $script:People.ContainsKey($Identity)) {
             if ($Identity -notlike '*@*') { throw "그런 사람이 없습니다: $Identity" }
             $script:People[$Identity] = [pscustomobject]@{
@@ -236,7 +254,89 @@ function Get-ConnectionInformation {
 
 function Get-TeavelFakeBlocked { param() $script:Blocked }
 
-function Add-UnifiedGroupLinks { param($Identity, $LinkType, $Links, $ErrorAction) }
+<#
+    그룹의 구성원·소유자.
+
+    <b>진짜로 담아야 한다.</b> 전에는 아무것도 안 하는 빈 함수였는데, 그때는 팀 구성원을
+    Teams 쪽(Get-TeamUser)에서 읽었으니 티가 안 났다. 이제 읽기도 넣기도 이쪽으로 오므로,
+    빈 함수로 두면 '넣었습니다' 라고 해 놓고 목록이 그대로인 거짓말을 하게 된다.
+
+    키는 그룹의 ExternalDirectoryObjectId(GroupId)다 — 진짜에서 화면이 넘기는 것이 그것이다.
+#>
+$script:Links = @{}
+
+function Get-TeavelFakeLinkKey {
+    param($Identity, $LinkType)
+
+    # 화면은 GroupId 로 넘기지만 별칭이나 이름으로 부를 수도 있다.
+    # 어느 쪽으로 불러도 같은 칸을 가리켜야 한다 — 창고 낱장에는 GroupId 칸이 없으므로
+    # 별칭에서 만들어 낸다(Get-UnifiedGroup 이 내줄 때와 같은 방법이다).
+    $id = [string]$Identity
+    $row = @($script:Store) | Where-Object {
+        $_.Alias -eq $id -or $_.DisplayName -eq $id -or (Get-FakeGroupId -Alias ([string]$_.Alias)) -eq $id
+    } | Select-Object -First 1
+
+    if (-not $row) { throw "그런 그룹이 없습니다: $Identity" }
+    $id = Get-FakeGroupId -Alias ([string]$row.Alias)
+
+    $kind = if ([string]$LinkType -match '^Owner') { 'Owners' } else { 'Members' }
+    "$id|$kind"
+}
+
+function Add-UnifiedGroupLinks {
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
+    param($Identity, $LinkType, $Links)
+
+    if (-not $PSCmdlet.ShouldProcess([string]$Identity, '사람 넣기')) { return }
+
+    $key = Get-TeavelFakeLinkKey -Identity $Identity -LinkType $LinkType
+    if (-not $script:Links.ContainsKey($key)) { $script:Links[$key] = @() }
+
+    foreach ($l in @($Links)) {
+        $u = [string]$l
+        if (-not $u) { continue }
+
+        # 진짜는 이미 들어 있는 사람을 다시 넣으면 거절한다.
+        if ($script:Links[$key] -contains $u) {
+            throw "이미 들어 있습니다: $u"
+        }
+        $script:Links[$key] += $u
+    }
+}
+
+function Remove-UnifiedGroupLinks {
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
+    param($Identity, $LinkType, $Links)
+
+    if (-not $PSCmdlet.ShouldProcess([string]$Identity, '사람 빼기')) { return }
+
+    $key = Get-TeavelFakeLinkKey -Identity $Identity -LinkType $LinkType
+    if (-not $script:Links.ContainsKey($key)) { throw "들어 있지 않습니다: $Links" }
+
+    foreach ($l in @($Links)) {
+        $u = [string]$l
+        if ($script:Links[$key] -notcontains $u) { throw "들어 있지 않습니다: $u" }
+        $script:Links[$key] = @($script:Links[$key] | Where-Object { $_ -ne $u })
+    }
+}
+
+function Get-UnifiedGroupLinks {
+    param($Identity, $LinkType, $ResultSize, $ErrorAction)
+
+    $key = Get-TeavelFakeLinkKey -Identity $Identity -LinkType $LinkType
+    $upns = if ($script:Links.ContainsKey($key)) { @($script:Links[$key]) } else { @() }
+
+    foreach ($u in $upns) {
+        $name = $u
+        try { $name = (Get-User -Identity $u).DisplayName } catch { }
+        [pscustomobject]@{
+            Name              = $name
+            WindowsLiveID     = $u
+            PrimarySmtpAddress = $u
+            RecipientType     = 'UserMailbox'
+        }
+    }
+}
 
 <#
     가짜 New-Team 이 부른다. 진짜 New-Team 이 만든 그룹에는
@@ -267,5 +367,6 @@ function Set-FakeTeamFlag {
 
 Export-ModuleMember -Function Connect-ExchangeOnline, Disconnect-ExchangeOnline,
     Get-UnifiedGroup, New-UnifiedGroup, Set-UnifiedGroup, Remove-UnifiedGroup,
-    Add-UnifiedGroupLinks, Set-FakeTeamFlag, Set-FakeMemberCount, Get-FakeGroupId, Get-User, Set-User,
-    Get-ConnectionInformation, Get-TeavelFakeBlocked
+    Add-UnifiedGroupLinks, Remove-UnifiedGroupLinks, Get-UnifiedGroupLinks,
+    Set-FakeTeamFlag, Set-FakeMemberCount, Get-FakeGroupId, Get-User, Set-User,
+    Get-ConnectionInformation, Get-TeavelFakeBlocked, Remove-TeavelFakeUser
