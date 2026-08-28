@@ -57,11 +57,52 @@ public sealed class AdminApi
     /// <summary>화면에서 [끝내기] 를 눌렀는지. 콘솔이 이것을 보고 판을 접는다.</summary>
     public bool Finished { get; private set; }
 
-    public AdminApi(M365Host host, SchoolTree tree, string token)
+    public AdminApi(M365Host host, SchoolTree tree, string token, Func<CancellationToken, Task<M365Host>>? graphHost = null)
     {
         _host = host;
         _tree = tree;
         _token = token;
+        _newGraphHost = graphHost;
+    }
+
+    /// <summary>
+    /// Graph 는 <b>다른 프로세스에서</b> 산다.
+    /// </summary>
+    /// <remarks>
+    /// 한 프로세스에 둘을 같이 두면 붙지 않는다. Exchange 3.10.1 은 Azure.Core 1.50 을,
+    /// Graph 2.39 는 1.51 을 들고 오는데, 먼저 들어온 쪽이 이긴다. Exchange 가 먼저 붙는
+    /// 우리 세션에서는 Graph 를 부르는 순간 이렇게 끝났다(2026-08-28).
+    ///
+    ///     'UserProvidedTokenCredential' 형식의 'GetTokenAsync' 메서드에 구현이 없습니다.
+    ///
+    /// 순서를 뒤집어 Graph 를 먼저 부르면 붙기는 한다. 그러나 그러면 Exchange 가 자기가
+    /// 들고 온 적 없는 Azure.Core 위에서 돌게 된다 — <b>되는 길을 걸고 하는 도박</b>이다.
+    /// 세션을 가르면 둘 다 자기 것 위에서 돈다.
+    ///
+    /// 로그인이 늘지는 않는다. Graph 는 어차피 동의 화면이 따로 뜨는 별개의 로그인이고,
+    /// 이 세션은 한 번 붙으면 화면을 닫을 때까지 그대로 산다.
+    /// </remarks>
+    private readonly Func<CancellationToken, Task<M365Host>>? _newGraphHost;
+    private M365Host? _graph;
+    private readonly SemaphoreSlim _graphGate = new(1, 1);
+
+    private async Task<M365Host> GraphAsync(CancellationToken ct)
+    {
+        if (_graph is { IsAlive: true }) return _graph;
+
+        await _graphGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_graph is { IsAlive: true }) return _graph;
+
+            // 띄우지 못하는 판이면 하던 대로 한 세션에서 해 본다.
+            // 안 될 수도 있지만, 못 한다고 손 놓는 것보다는 낫다.
+            if (_newGraphHost is null) return _host;
+
+            _graph = await _newGraphHost(ct).ConfigureAwait(false);
+            return _graph;
+        }
+        finally { _graphGate.Release(); }
     }
 
     /// <summary>
@@ -499,7 +540,8 @@ public sealed class AdminApi
 
     private async Task<HttpSay> GraphReadyAsync(CancellationToken ct)
     {
-        var res = await _host.CallAsync("Get-TeavelGraphReadiness", ct: ct).ConfigureAwait(false);
+        var g = await GraphAsync(ct).ConfigureAwait(false);
+        var res = await g.CallAsync("Get-TeavelGraphReadiness", ct: ct).ConfigureAwait(false);
         return Ok(new { ok = res.Ok, ready = res.Ok && !res.Message.Contains("갖춰야", StringComparison.Ordinal),
                         message = res.Message, details = res.Details });
     }
@@ -509,7 +551,8 @@ public sealed class AdminApi
         {
             job.Info("모듈을 내려받습니다. 몇 분 걸릴 수 있습니다.");
 
-            var res = await _host.CallAsync("Install-TeavelGraphModule",
+            var g = await GraphAsync(jct).ConfigureAwait(false);
+            var res = await g.CallAsync("Install-TeavelGraphModule",
                 timeout: TimeSpan.FromMinutes(15), ct: jct).ConfigureAwait(false);
 
             if (res.Ok) { job.Ok(res.Message); job.Details(res.Details); job.Finish("갖췄습니다."); }
@@ -551,7 +594,7 @@ public sealed class AdminApi
                 var pw = made[i];
                 var name = byUpn.TryGetValue(upn, out var n) ? n : "";
 
-                var res = await _host.CallAsync("Reset-TeavelPassword", new Dictionary<string, object?>
+                var res = await (await GraphAsync(jct).ConfigureAwait(false)).CallAsync("Reset-TeavelPassword", new Dictionary<string, object?>
                 {
                     ["Identity"] = upn,
                     ["Password"] = pw,
@@ -628,7 +671,8 @@ public sealed class AdminApi
     {
         if (_graphScopes.Contains(scope)) return true;
 
-        var res = await _host.CallAsync("Connect-TeavelGraph",
+        var g = await GraphAsync(ct).ConfigureAwait(false);
+        var res = await g.CallAsync("Connect-TeavelGraph",
             new Dictionary<string, object?> { ["Scopes"] = new[] { scope } },
             timeout: TimeSpan.FromMinutes(20), ct: ct).ConfigureAwait(false);
 
@@ -1448,7 +1492,7 @@ public sealed class AdminApi
             {
                 jct.ThrowIfCancellationRequested();
 
-                var res = await _host.CallAsync("Remove-TeavelAccount",
+                var res = await (await GraphAsync(jct).ConfigureAwait(false)).CallAsync("Remove-TeavelAccount",
                     new Dictionary<string, object?> { ["Identity"] = upn },
                     timeout: TimeSpan.FromMinutes(2), ct: jct).ConfigureAwait(false);
 

@@ -84,11 +84,22 @@ public sealed class AdminFlow
         try { host = await M365Host.StartAsync(shell, _tools.ScriptsDirectory, Sink, ct).ConfigureAwait(false); }
         catch (Exception ex) { Ui.Error(ex.Message); return 2; }
 
+        // Graph 는 자기 세션에서 산다 — 까닭은 AdminApi.GraphAsync 에 적었다.
+        // 처음 쓸 때 한 번 뜨고, 화면을 닫을 때 함께 닫힌다.
+        var graphs = new List<M365Host>();
+
+        async Task<M365Host> NewGraphHost(CancellationToken c)
+        {
+            var g = await M365Host.StartAsync(shell, _tools.ScriptsDirectory, Sink, c).ConfigureAwait(false);
+            graphs.Add(g);
+            return g;
+        }
+
         // 상주 세션은 판 중간에 갈릴 수 있다(모듈을 깐 뒤 새로 띄운다).
         // using 으로 묶으면 처음 것만 붙잡혀 새 세션이 닫히지 않는다.
         try
         {
-            api = new AdminApi(host, tree, server.Token);
+            api = new AdminApi(host, tree, server.Token, NewGraphHost);
 
             // 모듈 설치는 흐름 쪽 것을 그대로 쓴다. 여기서 '모자라니 teavel m365 를
             // 실행하세요' 라고 하면, 그 명령도 이 화면으로 오므로 제자리를 돈다.
@@ -103,7 +114,7 @@ public sealed class AdminFlow
                 catch (Exception ex) { Ui.Error(ex.Message); return 2; }
 
                 // 화면이 옛 세션을 들고 있으면 첫 명령부터 '끊어졌습니다' 가 된다.
-                api = new AdminApi(host, tree, server.Token);
+                api = new AdminApi(host, tree, server.Token, NewGraphHost);
 
                 if (!await M365Flow.ConfirmModulesAsync(host, ct).ConfigureAwait(false)) return 2;
             }
@@ -134,6 +145,12 @@ public sealed class AdminFlow
         finally
         {
             await host.DisposeAsync().ConfigureAwait(false);
+
+            // Graph 세션도 함께 닫는다. 안 닫으면 화면을 닫아도 PowerShell 이 남는다.
+            foreach (var g in graphs)
+            {
+                try { await g.DisposeAsync().ConfigureAwait(false); } catch { /* 닫는 길이다 */ }
+            }
         }
     }
 

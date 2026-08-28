@@ -1636,12 +1636,16 @@ function Remove-TeavelAccount {
     Import-Module Microsoft.Graph.Users -ErrorAction Stop
 
     # 자기 자신을 지우면 그 자리에서 관리 화면도, 되돌릴 사람도 함께 사라진다.
+    #
+    # 누구로 로그인했는지는 <b>Graph 에게 묻는다.</b> 전에는 Exchange 에게 물었는데,
+    # 그러면 이 세션에 ExchangeOnlineManagement 가 딸려 들어온다. 그 순간 Azure.Core 가
+    # 1.50 으로 고정되고 Graph 는 1.51 을 찾다가 부러진다(2026-08-28):
+    #
+    #     'UserProvidedTokenCredential' 형식의 'GetTokenAsync' 메서드에 구현이 없습니다.
+    #
+    # 이 세션은 Graph 만 있는 곳이라야 한다. 마침 Get-MgContext 가 같은 것을 알려 준다.
     $me = ''
-    try {
-        Import-Module ExchangeOnlineManagement -ErrorAction SilentlyContinue
-        $conn = @(Get-ConnectionInformation -ErrorAction Stop)
-        if ($conn.Count -gt 0) { $me = [string]$conn[0].UserPrincipalName }
-    } catch { }
+    try { $me = [string](Get-MgContext -ErrorAction Stop).Account } catch { }
 
     if ($me -and $me -eq $Identity) {
         throw '지금 로그인하신 계정입니다. 자기 자신은 지울 수 없습니다.'
