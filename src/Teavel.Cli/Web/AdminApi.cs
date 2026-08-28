@@ -229,7 +229,20 @@ public sealed class AdminApi
 
         if (res.Ok)
         {
-            _people = UserDirectory.Parse(res.Details);
+            var read = UserDirectory.Parse(res.Details);
+
+            // 지운 사람이 아직 딸려 온다.
+            //
+            // 계정은 Graph 로 지우지만 이 목록은 Exchange 에서 온다. 지운 것이 그쪽까지
+            // 퍼지는 데 시간이 걸려서, 지운 직후 다시 읽어도 그대로 나온다. 실기에서
+            // '지우는 것까지는 됐는데 이름이 남았다' 가 그것이다(2026-08-28).
+            //
+            // 우리는 지운 것을 안다. 화면이 그걸 따라가야 한다 — 남아 있으면 관리자는
+            // 안 지워진 줄 알고 한 번 더 누르시게 된다.
+            _people = _deleted.Count == 0
+                ? read
+                : read.Where(p => !_deleted.Contains(p.Upn)).ToList();
+
             _peopleRead = true;
             _peopleProblem = "";
             return;
@@ -238,6 +251,12 @@ public sealed class AdminApi
         _peopleRead = false;
         _peopleProblem = res.Message;
     }
+
+    /// <remarks>
+    /// 이 판에서 지운 사람들. 화면을 닫으면 잊는다 — 다시 켜면 그때의 진짜 목록을 본다.
+    /// 되살리셨을 때 계속 감추고 있지 않으려면 그 편이 맞다.
+    /// </remarks>
+    private readonly HashSet<string> _deleted = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>선언한 학교 모양. 명단이 있으면 그것으로 반을 만들고, 없으면 선언 파일 그대로.</summary>
     private IReadOnlyList<DeclaredGroup> Declared()
@@ -1498,7 +1517,7 @@ public sealed class AdminApi
 
                 var name = byUpn.TryGetValue(upn, out var n) && n.Length > 0 ? n : upn;
 
-                if (res.Ok) { job.Ok($"{name} — 지웠습니다."); done++; }
+                if (res.Ok) { job.Ok($"{name} — 지웠습니다."); _deleted.Add(upn); done++; }
                 else { job.Warn($"{name} — {res.Message}"); failed++; }
             }
 
