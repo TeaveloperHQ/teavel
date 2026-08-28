@@ -1167,8 +1167,13 @@ function Add-TeavelTeamMember {
     $done   = New-Object System.Collections.Generic.List[string]
     $failed = New-Object System.Collections.Generic.List[string]
 
-    foreach ($u in $Users) {
-        if (-not $u) { continue }
+    # 몇 명 중 몇 번째인지 세어 둔다 — 진행 칸에 그대로 흘려보낸다.
+    $all = @($Users | Where-Object { $_ })
+    $total = $all.Count
+    $n = 0
+
+    foreach ($u in $all) {
+        $n++
         try {
             Invoke-TeavelWrite -Command 'Add-UnifiedGroupLinks' -Arguments @{
                 Identity = $GroupId; LinkType = $link; Links = $u
@@ -1185,9 +1190,11 @@ function Add-TeavelTeamMember {
             }
 
             $done.Add($u)
+            Write-Host ("  ({0}/{1}) {2}" -f $n, $total, $u)
         }
         catch {
             $failed.Add("$($u) — $($_.Exception.Message)")
+            Write-Host ("  ({0}/{1}) {2} — 넣지 못했습니다" -f $n, $total, $u)
         }
     }
 
@@ -1235,14 +1242,22 @@ function Remove-TeavelTeamStudent {
     $done   = New-Object System.Collections.Generic.List[string]
     $failed = New-Object System.Collections.Generic.List[string]
 
+    $total = $targets.Count
+    $n = 0
+
     foreach ($u in $targets) {
+        $n++
         try {
             Invoke-TeavelWrite -Command 'Remove-UnifiedGroupLinks' -Arguments @{
                 Identity = $GroupId; LinkType = 'Members'; Links = $u
             } | Out-Null
             $done.Add($u)
+            Write-Host ("  ({0}/{1}) {2}" -f $n, $total, $u)
         }
-        catch { $failed.Add("$($u) — $($_.Exception.Message)") }
+        catch {
+            $failed.Add("$($u) — $($_.Exception.Message)")
+            Write-Host ("  ({0}/{1}) {2} — 내보내지 못했습니다" -f $n, $total, $u)
+        }
     }
 
     $d = New-Object System.Collections.Generic.List[string]

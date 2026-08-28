@@ -130,6 +130,7 @@ async function run(started, onDone) {
 
   clearInterval(watching);
   let from = 0;
+  let lastPaint = Date.now();
 
   watching = setInterval(async () => {
     let view;
@@ -170,12 +171,26 @@ async function run(started, onDone) {
     if (view.lines.length) $('#drawer-lines').scrollTop = $('#drawer-lines').scrollHeight;
     from = view.next;
 
+    // 끝날 때까지 기다리지 않는다.
+    //
+    // 예순 명을 넣거나 팀 열일곱 개를 읽는 동안 표가 옛 모습 그대로 있으면,
+    // 진행 칸은 흐르는데 화면은 가만있는 꼴이라 무엇이 반영된 것인지 알 수 없다.
+    // 새 줄이 왔을 때만, 그것도 뜸을 두고 다시 그린다 — 매번 다시 그리면 표가 떤다.
+    //
+    // onDone 이 아니라 draw 를 부른다. onDone 은 끝나고서야 할 일일 수 있다 —
+    // 비밀번호는 바뀐 것을 종이로 내주는 창을 여는데, 도는 중에 그것이 열리면
+    // 아직 바뀌지도 않은 사람들 것을 내주게 된다.
+    if (view.lines.length && Date.now() - lastPaint > 2500) {
+      lastPaint = Date.now();
+      draw(true);
+    }
+
     if (view.done) {
       clearInterval(watching);
       watching = null;
       $('#drawer-state').textContent = view.summary || '끝났습니다.';
       $('#drawer-close').hidden = false;
-      if (onDone) onDone();
+      if (onDone) onDone();   // 끝나고 한 번은 조용하지 않게 — 마지막 모습을 확실히 맞춘다
     }
   }, 500);
 }
@@ -187,22 +202,37 @@ $('#drawer-close').onclick = () => { $('#drawer').hidden = true; };
 const PAGES = {};
 let state = {};
 
-async function draw() {
-  // 브라우저는 한글 해시를 퍼센트 인코딩해서 돌려준다 — '#/그룹' 을 눌러도
-  // location.hash 는 '#/%EA%B7%B8%EB%A3%B9' 다. 풀지 않으면 늘 첫 장만 뜬다.
-  let hash = location.hash || '#/한눈에';
-  try { hash = decodeURIComponent(hash); } catch (e) { /* 온 그대로 쓴다 */ }
+let drawing = false;
 
-  const name = hash.replace('#/', '');
-  const page = PAGES[name] || PAGES['한눈에'];
+/**
+ * 낱장을 다시 그린다.
+ *
+ * @param quiet 일이 도는 중에 따라 그리는 것인지. 그때는 '읽는 중…' 으로 지우지 않는다 —
+ *              몇 초마다 표가 사라졌다 나타나면 읽고 계시던 자리를 놓친다.
+ */
+async function draw(quiet) {
+  // 겹쳐 부르지 않는다. 도는 중에 따라 그리다 보면 앞엣것이 끝나기 전에 다음이 온다.
+  if (drawing) return;
+  drawing = true;
 
-  $$('a.nav').forEach(a => a.classList.toggle('on', a.getAttribute('href') === '#/' + name));
-  $('#page').innerHTML = '<div class="loading">읽는 중…</div>';
+  try {
+    // 브라우저는 한글 해시를 퍼센트 인코딩해서 돌려준다 — '#/그룹' 을 눌러도
+    // location.hash 는 '#/%EA%B7%B8%EB%A3%B9' 다. 풀지 않으면 늘 첫 장만 뜬다.
+    let hash = location.hash || '#/한눈에';
+    try { hash = decodeURIComponent(hash); } catch (e) { /* 온 그대로 쓴다 */ }
 
-  try { await page(); }
-  catch (e) { $('#page').innerHTML = `<div class="card bad"><b>읽지 못했습니다.</b><p>${esc(e.message)}</p></div>`; }
+    const name = hash.replace('#/', '');
+    const page = PAGES[name] || PAGES['한눈에'];
 
-  await chrome();
+    $$('a.nav').forEach(a => a.classList.toggle('on', a.getAttribute('href') === '#/' + name));
+    if (!quiet) $('#page').innerHTML = '<div class="loading">읽는 중…</div>';
+
+    try { await page(); }
+    catch (e) { $('#page').innerHTML = `<div class="card bad"><b>읽지 못했습니다.</b><p>${esc(e.message)}</p></div>`; }
+
+    await chrome();
+  }
+  finally { drawing = false; }
 }
 
 /** 왼쪽 메뉴의 숫자와 위쪽 명단 띠 — 어느 낱장에서나 같아야 한다. */
@@ -512,7 +542,7 @@ PAGES['구성원'] = async () => {
       <button class="cmd" id="unblock"><span class="i">&#xE785;</span> 차단 풀기</button>
       <button class="cmd bad" id="del"><span class="i">&#xE74D;</span> 계정 지우기</button>
       <span class="grow"></span>
-      <input type="search" id="q" placeholder="이름 · 아이디로 찾기" style="width:230px">
+      <input type="search" id="q" placeholder="이름 · 아이디로 찾기" style="width:230px" value="${esc(state.q || '')}">
       <span class="sub" id="count"></span>
     </div>
 
@@ -532,7 +562,9 @@ PAGES['구성원'] = async () => {
     </div>`;
 
   $('#bulk').onclick = () => openClasses('add');
-  $('#q').oninput = paint;
+
+  // 도는 중에 따라 그려도 찾던 말이 남아 있어야 한다.
+  $('#q').oninput = () => { state.q = $('#q').value; paint(); };
 
   // 지금 왼쪽 나무에서 고른 가지가 그대로 대상이 된다 —
   // '1학년' 을 열어 두고 누르면 1학년 전체고, '3학년 2반' 이면 그 반이다.
