@@ -127,6 +127,7 @@ async function run(started, onDone) {
   $('#drawer-lines').innerHTML = '';
   $('#drawer-close').hidden = true;
   $('#drawer').hidden = false;
+  liftPage();
 
   clearInterval(watching);
   let from = 0;
@@ -168,7 +169,7 @@ async function run(started, onDone) {
       $('#drawer-lines').appendChild(div);
     }
 
-    if (view.lines.length) $('#drawer-lines').scrollTop = $('#drawer-lines').scrollHeight;
+    if (view.lines.length) { $('#drawer-lines').scrollTop = $('#drawer-lines').scrollHeight; liftPage(); }
     from = view.next;
 
     // 끝날 때까지 기다리지 않는다.
@@ -195,7 +196,94 @@ async function run(started, onDone) {
   }, 500);
 }
 
-$('#drawer-close').onclick = () => { $('#drawer').hidden = true; };
+/**
+ * 끌어서 크기 바꾸기.
+ *
+ * <b>어느 크기가 맞는지는 우리가 정할 수 없다.</b> 반 이름이 길어 나무가 좁은 학교도
+ * 있고, 표를 넓게 보고 싶은 때도 있다. 진행 칸도 한 줄만 보고 싶을 때와 예순 줄을
+ * 훑고 싶을 때가 다르다. 그래서 정하지 않고 손에 맡기고, 정하신 것을 기억한다.
+ *
+ * @param grip  잡는 자리
+ * @param opts  vertical 이면 위아래, 아니면 좌우. apply 로 실제 크기를 매긴다.
+ */
+function draggable(grip, { vertical, get, apply, min, max, remember }) {
+  if (!grip) return;
+
+  grip.onmousedown = e => {
+    e.preventDefault();
+
+    const from = vertical ? e.clientY : e.clientX;
+    const was = get();
+    grip.classList.add('on');
+
+    // 끄는 동안 표의 글자가 딸려 잡히면 파랗게 물든다.
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = vertical ? 'ns-resize' : 'col-resize';
+
+    const move = ev => {
+      const moved = vertical ? from - ev.clientY : ev.clientX - from;
+      const now = Math.max(min, Math.min(max(), was + moved));
+      apply(now);
+    };
+
+    const up = () => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      grip.classList.remove('on');
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+
+      // 다음에 켜셔도 그대로이게 적어 둔다. 못 적어도 이번 판은 그대로 쓴다.
+      try { if (remember) localStorage.setItem(remember, String(get())); } catch (e) { }
+    };
+
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  };
+}
+
+/**
+ * 서랍이 덮은 만큼 낱장 아래를 띄운다.
+ *
+ * 서랍은 화면에 붙어 떠 있어서 표의 마지막 줄을 덮는다. 예순 명 중 마지막 몇 명이
+ * 안 보이면 관리자는 그 사람들이 없는 줄 아신다.
+ */
+function liftPage() {
+  const d = $('#drawer');
+  const h = d.hidden ? 0 : d.getBoundingClientRect().height;
+  document.body.style.paddingBottom = h ? h + 16 + 'px' : '';
+}
+
+/** 기억해 둔 크기를 꺼낸다. 없거나 이상하면 <c>null</c>. */
+function remembered(key) {
+  try {
+    const v = parseInt(localStorage.getItem(key), 10);
+    return Number.isFinite(v) && v > 0 ? v : null;
+  } catch (e) { return null; }
+}
+
+// 진행 칸 높이.
+{
+  const drawer = $('#drawer');
+  const kept = remembered('teavel.drawer');
+  if (kept) { drawer.style.height = kept + 'px'; drawer.style.maxHeight = kept + 'px'; }
+
+  draggable($('#drawer-grip'), {
+    vertical: true,
+    get: () => drawer.getBoundingClientRect().height,
+    apply: h => {
+      drawer.style.height = h + 'px';
+      drawer.style.maxHeight = h + 'px';   // 이것도 같이 풀어 줘야 46vh 위로 커진다
+      liftPage();
+    },
+    min: 92,
+    max: () => window.innerHeight * 0.85,
+    remember: 'teavel.drawer',
+  });
+}
+
+
+$('#drawer-close').onclick = () => { $('#drawer').hidden = true; liftPage(); };
 
 // ── 낱장 ────────────────────────────────────────────────────────────────
 
@@ -548,6 +636,7 @@ PAGES['구성원'] = async () => {
 
     <div class="split">
       <div class="tree" id="tree"></div>
+      <div class="grip" id="tree-grip" title="끌어서 너비를 바꾸실 수 있습니다"></div>
       <div class="wrap"><table>
         <thead><tr>
           <th class="sortable" data-sort="name">표시 이름 <span class="arrow" data-arrow="name"></span></th>
@@ -565,6 +654,22 @@ PAGES['구성원'] = async () => {
 
   // 도는 중에 따라 그려도 찾던 말이 남아 있어야 한다.
   $('#q').oninput = () => { state.q = $('#q').value; paint(); };
+
+  // 나무와 표 사이. 낱장을 다시 그릴 때마다 새로 매어 준다.
+  {
+    const tree = $('#tree');
+    const kept = remembered('teavel.tree');
+    if (kept) tree.style.width = kept + 'px';
+
+    draggable($('#tree-grip'), {
+      vertical: false,
+      get: () => tree.getBoundingClientRect().width,
+      apply: w => { tree.style.width = w + 'px'; },
+      min: 120,
+      max: () => Math.max(200, window.innerWidth - 380),
+      remember: 'teavel.tree',
+    });
+  }
 
   // 지금 왼쪽 나무에서 고른 가지가 그대로 대상이 된다 —
   // '1학년' 을 열어 두고 누르면 1학년 전체고, '3학년 2반' 이면 그 반이다.
