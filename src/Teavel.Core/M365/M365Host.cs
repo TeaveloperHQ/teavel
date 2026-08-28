@@ -63,11 +63,32 @@ public sealed class M365Host : IAsyncDisposable
     /// <param name="shell">powershell.exe 등. <see cref="ToolRunner.FindPowerShell"/> 이 고른 것.</param>
     /// <param name="scriptsDirectory">Teavel.M365.psm1 이 있는 폴더.</param>
     /// <param name="onProgress">진행 상황 한 줄이 올 때마다 부른다(브라우저 로그인 안내 등).</param>
+    /// <param name="shareConsole">
+    /// 부모의 콘솔 창을 물려줄지. <b>Graph 세션에만 켠다.</b>
+    /// </param>
+    /// <remarks>
+    /// <b>창 손잡이 이야기.</b> 이 세션들은 창 없이 돌아서 <c>GetConsoleWindow()</c> 가 0 이다.
+    /// Exchange 는 <c>MSAL_DISABLE_WAM=1</c> 로 창 방식을 꺼 두어 상관이 없었는데,
+    /// Graph 2.39 에는 그 스위치가 없다. 모듈 안을 뒤져도 WAM 을 끄는 환경 변수가 없고,
+    /// 그래서 이렇게 끝났다(2026-08-28).
+    ///
+    ///     A window handle must be configured.
+    ///
+    /// <c>CreateNoWindow</c> 를 끄면 자식은 <b>부모의 콘솔을 그대로 물려받는다</b> —
+    /// 새 까만 창이 뜨는 것이 아니다. 재어 보고 확인했다.
+    ///
+    ///     CreateNoWindow=true   자식 HWND 0
+    ///     CreateNoWindow=false  자식 HWND 330592 = 부모의 것과 같은 값
+    ///
+    /// 그러면 WAM 이 그 창에 기대어 로그인 창을 띄울 수 있다. 다만 부모에게 콘솔이
+    /// 없는 판에서는 자식에게 새 콘솔이 생기므로, 필요한 세션에만 켠다.
+    /// </remarks>
     public static async Task<M365Host> StartAsync(
         string shell,
         string scriptsDirectory,
         Action<string> onProgress,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool shareConsole = false)
     {
         var hostScript = Path.Combine(scriptsDirectory, "Invoke-TeavelM365Host.ps1");
 
@@ -77,7 +98,7 @@ public sealed class M365Host : IAsyncDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
-            CreateNoWindow = true,
+            CreateNoWindow = !shareConsole,
             StandardOutputEncoding = new UTF8Encoding(false),
             StandardErrorEncoding = new UTF8Encoding(false),
         };

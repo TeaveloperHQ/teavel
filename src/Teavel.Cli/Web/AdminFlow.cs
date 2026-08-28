@@ -90,7 +90,9 @@ public sealed class AdminFlow
 
         async Task<M365Host> NewGraphHost(CancellationToken c)
         {
-            var g = await M365Host.StartAsync(shell, _tools.ScriptsDirectory, Sink, c).ConfigureAwait(false);
+            // 부모 콘솔을 물려준다 — Graph 로그인이 창 손잡이를 요구하기 때문이다.
+            var g = await M365Host.StartAsync(
+                shell, _tools.ScriptsDirectory, Sink, c, shareConsole: true).ConfigureAwait(false);
             graphs.Add(g);
             return g;
         }

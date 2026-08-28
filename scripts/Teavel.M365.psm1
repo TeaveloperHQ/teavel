@@ -1594,7 +1594,9 @@ function Connect-TeavelGraph {
     Write-Host ('  ' + $head)
     Write-Host '  ─────────────────────────────────────────────'
     Write-Host ''
-    Write-Host '  ① 인터넷 창이 열리고 학교 계정으로 로그인합니다'
+    Write-Host '  ① 로그인 창이 하나 열립니다'
+    Write-Host '     윈도우 계정 창일 수도 있고 인터넷 창일 수도 있습니다 — 어느 쪽이든 같습니다.'
+    Write-Host '     이미 로그인된 계정이 보이면 그것을 고르시면 됩니다.'
     Write-Host '  ② "요청한 권한" 화면이 나옵니다'
     Write-Host ('  ③ 적혀 있는 것은 하나입니다 — ' + $shown)
     Write-Host '  ④ [수락] 을 누릅니다'
