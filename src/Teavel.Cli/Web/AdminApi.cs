@@ -1414,10 +1414,24 @@ public sealed class AdminApi
 
         if (upns.Count == 0) return new { ok = false, message = "누구를 지울지 받지 못했습니다." };
 
-        if (typed != upns.Count.ToString(CultureInfo.InvariantCulture))
-            return new { ok = false, message = $"적으신 숫자가 다릅니다. 지우지 않았습니다 — {upns.Count} 을(를) 적어 주세요." };
-
         var byUpn = _people.ToDictionary(p => p.Upn, p => p.DisplayName, StringComparer.OrdinalIgnoreCase);
+
+        // 무엇을 적어야 여는가.
+        //
+        // 여럿이면 몇 명인지다 — 적는 동안 그 수를 한 번 더 보게 된다. 그런데 한 사람일 때
+        // 그 문은 '1' 이라 사실상 없는 문이다. 줄 끝의 휴지통은 이름 바꾸기 바로 옆에 있어
+        // 잘못 누르기도 쉽다. 그래서 한 사람이면 <b>그 사람 이름</b>을 적게 한다 —
+        // 그룹 지우기와 같은 문이다.
+        var only = upns.Count == 1
+            ? _people.FirstOrDefault(p => p.Upn.Equals(upns[0], StringComparison.OrdinalIgnoreCase))
+            : null;
+
+        var wanted = only is not null && only.DisplayName.Trim().Length > 0
+            ? only.DisplayName.Trim()
+            : upns.Count == 1 ? upns[0] : upns.Count.ToString(CultureInfo.InvariantCulture);
+
+        if (!string.Equals(typed, wanted, StringComparison.Ordinal))
+            return new { ok = false, message = $"적으신 것이 다릅니다. 지우지 않았습니다 — '{wanted}' 을(를) 적어 주세요." };
 
         return Started(_jobs.Start(label.Length > 0 ? label : $"계정 지우기 {upns.Count}명", async (job, jct) =>
         {

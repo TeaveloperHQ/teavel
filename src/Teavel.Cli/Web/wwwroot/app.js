@@ -626,9 +626,16 @@ PAGES['구성원'] = async () => {
               ? r.groups.map(g => `<span class="pill sys" style="margin:1px">${esc(g)}</span>`).join(' ')
               : `<span class="sub">${p.scanned ? '없음' : '아직 안 읽음'}</span>`}</td>
           <td class="tight sub">${esc(r.created) || '모름'}</td>
-          <td class="tight"><button class="tiny" data-upn="${esc(r.upn)}"><span class="i"></span> 이름 바꾸기</button></td>
+          <td class="tight" style="white-space:nowrap"><button class="tiny" data-upn="${esc(r.upn)}"><span class="i"></span> 이름 바꾸기</button> <button class="tiny bad" data-del="${esc(r.upn)}" title="이 사람의 계정을 지웁니다"><span class="i"></span></button></td>
         </tr>`).join('')
         + (rows.length > 500 ? `<tr><td colspan="6" class="sub">앞의 500명만 보여 드립니다. 왼쪽에서 반을 골라 주세요.</td></tr>` : '');
+
+    // 한 사람만 지우기. 왼쪽 나무로 고르는 것과 같은 창으로 가고,
+    // 대상이 한 사람이므로 창이 스스로 문을 바꿔 단다(숫자 대신 이름).
+    $$('#rows button[data-del]').forEach(b => b.onclick = () => {
+      const who = state.people.find(x => x.upn === b.dataset.del);
+      if (who) openRemove([who], who.name || who.upn);
+    });
 
     $$('#rows button[data-upn]').forEach(b => b.onclick = async () => {
       const who = state.people.find(x => x.upn === b.dataset.upn);
@@ -818,6 +825,17 @@ function openBlock(people, where, blocked) {
 function openRemove(people, where) {
   const targets = people.slice();
 
+  // 무엇을 적어야 열리는가.
+  //
+  // 여럿일 때는 <b>몇 명인지</b>다 — 예순 명을 지우면서 그 숫자를 못 적을 리 없고,
+  // 적는 동안 한 번 더 보게 된다. 그런데 한 사람일 때 그 문은 '1' 이라 너무 헐겁다.
+  // 그래서 한 사람일 때는 <b>그 사람 이름</b>을 적게 한다 — 그룹 지우기와 같은 문이다.
+  const one = targets.length === 1 ? targets[0] : null;
+  const key = one ? (one.name || one.upn) : String(targets.length);
+  const why = one
+    ? '누구를 지우는지 한 번 더 확인하시는 자리입니다.'
+    : '몇 명이 지워지는지 한 번 더 확인하시는 자리입니다.';
+
   veil(`
     <h3>계정 지우기</h3>
     <p><b>${esc(where || '고른 사람')}</b> — ${targets.length}명</p>
@@ -852,14 +870,14 @@ function openRemove(people, where) {
     </details>
 
     <div class="card">
-      <b>지우시려면 <code>${targets.length}</code> 을(를) 아래에 적어 주세요.</b>
-      <div class="sub">몇 명이 지워지는지 한 번 더 확인하시는 자리입니다.</div>
-      <input id="rm-typed" style="margin-top:10px;width:120px" autocomplete="off" placeholder="${targets.length}">
+      <b>지우시려면 <code>${esc(key)}</code> 을(를) 아래에 적어 주세요.</b>
+      <div class="sub">${why}</div>
+      <input id="rm-typed" style="margin-top:10px;width:${one ? 240 : 120}px" autocomplete="off" placeholder="${esc(key)}">
     </div>
 
     <div class="acts">
       <button id="rm-no">그만두기</button>
-      <button id="rm-go" class="bad" disabled>${targets.length}명 지우기</button>
+      <button id="rm-go" class="bad" disabled>${one ? esc(one.name || one.upn) + ' 지우기' : targets.length + '명 지우기'}</button>
     </div>`,
 
   (el, shut) => {
@@ -868,8 +886,8 @@ function openRemove(people, where) {
     const go = $('#rm-go', el);
     const box = $('#rm-typed', el);
 
-    // 숫자가 맞아야 단추가 열린다.
-    const check = () => { go.disabled = box.value.trim() !== String(targets.length); };
+    // 적으신 것이 맞아야 단추가 열린다.
+    const check = () => { go.disabled = box.value.trim() !== key; };
     box.oninput = check;
     check();
     box.focus();
@@ -895,7 +913,7 @@ function openRemove(people, where) {
       run(await api('/api/people/delete', {
         upns: targets.map(r => r.upn),
         typed,
-        label: `계정 지우기 — ${where || ''} ${targets.length}명`,
+        label: one ? `계정 지우기 — ${one.name || one.upn}` : `계정 지우기 — ${where || ''} ${targets.length}명`,
       }), draw);
     };
   });
