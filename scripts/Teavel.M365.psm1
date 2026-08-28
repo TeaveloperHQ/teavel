@@ -1075,11 +1075,29 @@ function Sync-TeavelTeamChannel {
 function Get-TeavelLinkUpn {
     param($Recipient)
 
-    foreach ($field in 'WindowsLiveID', 'UserPrincipalName', 'PrimarySmtpAddress') {
+    foreach ($field in 'WindowsLiveID', 'UserPrincipalName', 'PrimarySmtpAddress', 'ExternalEmailAddress') {
         $v = ''
         try { $v = [string]$Recipient.$field } catch { }
+        if ($v) { $v = $v -replace '^SMTP:', '' -replace '^smtp:', '' }
         if ($v -and $v.Contains('@')) { return $v }
     }
+
+    # 링크가 주는 낱장에 주소가 없을 수 있다 — 사서함이 없는 계정이 그렇다.
+    # 그래도 디렉터리에는 있으므로 한 번 더 물어본다. 여기서 포기하면 그 사람은
+    # 조용히 사라지고, 화면의 인원수가 실제보다 적어진다.
+    $key = ''
+    foreach ($field in 'ExternalDirectoryObjectId', 'Identity', 'Alias', 'Name') {
+        try { $key = [string]$Recipient.$field } catch { }
+        if ($key) { break }
+    }
+    if (-not $key) { return '' }
+
+    try {
+        $u = Get-User -Identity $key -ErrorAction Stop
+        $v = [string]$u.UserPrincipalName
+        if ($v -and $v.Contains('@')) { return $v }
+    } catch { }
+
     ''
 }
 
@@ -1121,9 +1139,10 @@ function Get-TeavelTeamMember {
     $d = New-Object System.Collections.Generic.List[string]
     $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
 
+    $lost = 0
     foreach ($m in $members) {
         $upn = Get-TeavelLinkUpn $m
-        if (-not $upn) { continue }
+        if (-not $upn) { $lost++; continue }
         if (-not $seen.Add($upn)) { continue }
         $role = if ($ownerSet.Contains($upn)) { 'Owner' } else { 'Member' }
         $d.Add(("MEMBER`t{0}`t{1}" -f $upn, $role))
@@ -1134,7 +1153,34 @@ function Get-TeavelTeamMember {
         if ($seen.Add($u)) { $d.Add(("MEMBER`t{0}`tOwner" -f $u)) }
     }
 
-    New-TeavelResult -Message "$($seen.Count)명이 들어 있습니다." -Details $d
+    <#
+        인원수를 대 본다.
+
+        <b>우리가 읽은 수가 진짜 수와 다를 수 있다.</b> 실기에서 1학년 과학 팀이
+        150명이 넘는데 80명으로 나왔다(2026-08-28). 링크로 읽는 길은 사서함이 없는
+        계정 같은 것을 빠뜨릴 수 있는데, 그것이 조용히 일어나면 관리자는 화면의
+        숫자를 믿고 '안 들어갔구나' 하고 또 넣으시게 된다.
+
+        디렉터리가 세어 둔 수(GroupMemberCount)와 대 보고, 다르면 다르다고 말한다.
+        맞히지 못하는 것보다 못 맞혔다고 말하는 것이 낫다.
+    #>
+    $told = -1
+    try {
+        $g = Get-UnifiedGroup -Identity $GroupId -ErrorAction Stop
+        $told = [int]$g.GroupMemberCount
+    } catch { }
+
+    $msg = "$($seen.Count)명이 들어 있습니다."
+
+    if ($told -ge 0 -and $told -ne $seen.Count) {
+        $msg = "$($seen.Count)명을 읽었습니다 (학교 명부에는 $told 명으로 돼 있습니다)."
+        $d.Add("NOTE`t학교 명부는 $told 명, 여기서 읽힌 것은 $($seen.Count)명입니다.")
+        if ($lost -gt 0) {
+            $d.Add("NOTE`t$lost 명은 누구인지 알아내지 못했습니다 — 사서함이 없는 계정일 수 있습니다.")
+        }
+    }
+
+    New-TeavelResult -Message $msg -Details $d
 }
 
 <#

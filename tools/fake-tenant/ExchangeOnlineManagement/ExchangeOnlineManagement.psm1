@@ -119,8 +119,13 @@ function Get-UnifiedGroup {
     param($Identity, $ResultSize, $ErrorAction)
 
     if ($Identity) {
+        # 진짜는 GUID(ExternalDirectoryObjectId)로도 찾아 준다. 화면이 넘기는 것이 그것이라
+        # 여기서 못 찾으면 진짜에서는 되는 길이 가짜에서만 막힌다 — 시험이 안 된다.
         $row = $script:Store |
-               Where-Object { $_.Alias -eq $Identity -or $_.DisplayName -eq $Identity } |
+               Where-Object {
+                   $_.Alias -eq $Identity -or $_.DisplayName -eq $Identity -or
+                   (Get-FakeGroupId -Alias ([string]$_.Alias)) -eq $Identity
+               } |
                Select-Object -First 1
         if (-not $row) { throw "그런 그룹이 없습니다: $Identity" }
         return (New-FakeRow $row)

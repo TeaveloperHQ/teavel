@@ -1163,7 +1163,15 @@ public sealed class AdminApi
                 _members[id] = res.Ok ? M365Flow.ParseMembers(res.Details) : Array.Empty<TeamMember>();
                 n++;
 
-                if (res.Ok) { job.Dim($"{name} — {_members[id].Count}명"); continue; }
+                if (res.Ok)
+                {
+                    job.Dim($"{name} — {_members[id].Count}명");
+
+                    // 읽은 수가 학교 명부와 다르면 그 자리에서 말한다.
+                    // 조용히 적은 숫자를 보여 주면 '안 들어갔구나' 하고 또 넣으시게 된다.
+                    foreach (var note in Notes(res.Details)) job.Warn($"{name} — {note}");
+                    continue;
+                }
 
                 job.Warn($"{name} — {res.Message}");
             }
@@ -1171,6 +1179,12 @@ public sealed class AdminApi
             _scanned = true;
             job.Finish($"{n}개 팀을 읽었습니다.");
         }, ct));
+
+    /// <summary>사람 목록에 섞여 오는 <c>NOTE</c> 줄만 골라낸다 — 관리자에게 그대로 보여 줄 말이다.</summary>
+    private static IEnumerable<string> Notes(IEnumerable<string> details)
+        => details
+            .Where(d => d.StartsWith("NOTE\t", StringComparison.Ordinal))
+            .Select(d => d[5..].Trim());
 
     private object StartAddMembers(HttpAsk ask, CancellationToken ct)
     {
@@ -1202,7 +1216,13 @@ public sealed class AdminApi
                 new Dictionary<string, object?> { ["GroupId"] = groupId },
                 timeout: TimeSpan.FromMinutes(2), ct: jct).ConfigureAwait(false);
 
-            if (back.Ok) _members[groupId] = M365Flow.ParseMembers(back.Details);
+            if (back.Ok)
+            {
+                _members[groupId] = M365Flow.ParseMembers(back.Details);
+
+                // 넣은 뒤 다시 읽었는데 수가 학교 명부와 다르면 그대로 말한다.
+                foreach (var note in Notes(back.Details)) job.Warn(note);
+            }
 
             job.Dim("학생 화면에 보이기까지 몇 분 걸릴 수 있습니다.");
             job.Finish($"{upns.Count}명을 넣었습니다.");
@@ -1334,7 +1354,13 @@ public sealed class AdminApi
                 new Dictionary<string, object?> { ["GroupId"] = groupId },
                 timeout: TimeSpan.FromMinutes(2), ct: jct).ConfigureAwait(false);
 
-            if (back.Ok) _members[groupId] = M365Flow.ParseMembers(back.Details);
+            if (back.Ok)
+            {
+                _members[groupId] = M365Flow.ParseMembers(back.Details);
+
+                // 넣은 뒤 다시 읽었는데 수가 학교 명부와 다르면 그대로 말한다.
+                foreach (var note in Notes(back.Details)) job.Warn(note);
+            }
 
             job.Dim("학생 화면에 보이기까지 몇 분 걸릴 수 있습니다.");
             job.Finish($"{todo.Count - bad.Count}명을 넣었습니다.");
