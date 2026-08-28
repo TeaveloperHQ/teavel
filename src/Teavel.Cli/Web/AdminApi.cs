@@ -395,7 +395,20 @@ public sealed class AdminApi
             alias = x.Item.Group.MailNickname,
             groupId = x.Item.Group.GroupId,
             isTeam = x.Item.Group.IsTeam,
-            members = x.Item.Group.MemberCount,
+
+            // 읽어 둔 것이 있으면 그것을 쓴다.
+            //
+            // Group.MemberCount 는 Exchange 가 세어 둔 값이라 <b>한참 뒤처진다.</b> 예순 명을
+            // 넣고 나서도 한동안 옛 수를 말한다. 실기에서 팀에 150명이 들어 있는데 목록에는
+            // 80명으로 떠 있었다(2026-08-28). 그 숫자를 보고 '안 들어갔구나' 하시게 된다.
+            //
+            // 우리가 방금 링크로 읽은 것이 있으면 그쪽이 지금의 사실이다.
+            members = _members.TryGetValue(x.Item.Group.GroupId, out var read)
+                ? read.Count
+                : x.Item.Group.MemberCount,
+
+            // 읽어 본 것인지 아닌지. 아직 안 읽었으면 화면이 그렇게 밝힌다.
+            counted = _members.ContainsKey(x.Item.Group.GroupId),
             created = x.Item.Group.Created,
             bucket = x.Item.Bucket == TriageBucket.System ? "건드리면 안 되는 것"
                    : x.Declared ? "이 학교에 있어야 하는 것"

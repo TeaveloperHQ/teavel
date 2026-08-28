@@ -722,7 +722,7 @@ async function openAssign(people, where) {
     </div>` : `
     <label class="lbl">어느 팀에 넣을까요?</label>
     <select id="as-team" style="width:100%">
-      ${teams.map(t => `<option value="${esc(t.groupId)}">${esc(t.name)}${t.members >= 0 ? ` — ${t.members}명` : ''}</option>`).join('')}
+      ${teams.map(t => `<option value="${esc(t.groupId)}">${esc(t.name)}${t.members >= 0 ? ` — ${t.members}명${t.counted ? '' : ' (읽기 전)'}` : ''}</option>`).join('')}
     </select>
 
     <label class="lbl" style="margin-top:14px">무엇으로 넣을까요?</label>
@@ -733,7 +733,7 @@ async function openAssign(people, where) {
 
     <div class="card" style="margin-top:14px">
       <b>이미 들어 있는 사람은 건너뜁니다.</b>
-      <div class="sub">여러 번 누르셔도 안전합니다. 팀을 만들려면 <b>로그인이 한 번 더</b> 필요합니다.</div>
+      <div class="sub">여러 번 누르셔도 안전합니다. 로그인은 더 필요 없습니다.</div>
     </div>`}
 
     <details class="tell">
